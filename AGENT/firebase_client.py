@@ -23,7 +23,10 @@ def _get_db():
         if not firebase_admin._apps:
             env_creds = os.environ.get("FIREBASE_CREDENTIALS")
             if env_creds:
-                cred = credentials.Certificate(json.loads(env_creds))
+                try:
+                    cred = credentials.Certificate(json.loads(env_creds))
+                except json.JSONDecodeError as e:
+                    raise RuntimeError(f"Variable FIREBASE_CREDENTIALS contient du JSON invalide : {e}") from e
             elif CREDS_PATH.exists():
                 cred = credentials.Certificate(str(CREDS_PATH))
             else:

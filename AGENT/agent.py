@@ -9,9 +9,9 @@ Cet agent tourne en arrière-plan et gère :
 Lancement : python agent.py
 """
 
+import base64
 import json
 import os
-import smtplib
 import schedule
 import time
 import logging
@@ -24,10 +24,6 @@ from firebase_client import (
     charger_saisies_semaine,
 )
 from datetime import datetime, date
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
 from pathlib import Path
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
@@ -47,11 +43,21 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+# Vérification des variables d'environnement critiques au démarrage
+_RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+if _RESEND_API_KEY:
+    resend.api_key = _RESEND_API_KEY
+else:
+    log.warning("RESEND_API_KEY non définie — les emails ne seront pas envoyés")
+
 # ─── CHARGEMENT DES DONNÉES ───────────────────────────────────────────────────
 def charger_config():
     env_config = os.environ.get("AGENT_CONFIG")
     if env_config:
-        return json.loads(env_config)
+        try:
+            return json.loads(env_config)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Variable AGENT_CONFIG contient du JSON invalide : {e}") from e
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -100,8 +106,6 @@ def envoyer_email(config, destinataire_email, destinataire_nom, sujet, corps_htm
             sujet = f"[TEST >> {destinataire_email}] {sujet}"
             destinataire_email = TEST_EMAIL_REDIRECT
 
-        resend.api_key = os.environ.get("RESEND_API_KEY", "")
-
         params = {
             "from": "noreply@resend.dev",
             "to": [destinataire_email],
@@ -113,7 +117,6 @@ def envoyer_email(config, destinataire_email, destinataire_nom, sujet, corps_htm
             attachments = []
             for chemin_fichier in pieces_jointes:
                 with open(chemin_fichier, "rb") as f:
-                    import base64
                     attachments.append({
                         "filename": Path(chemin_fichier).name,
                         "content": base64.b64encode(f.read()).decode("utf-8"),

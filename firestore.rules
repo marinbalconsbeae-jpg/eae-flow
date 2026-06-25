@@ -2,7 +2,6 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ─── HELPERS ────────────────────────────────────────────────────────────
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -11,59 +10,28 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == uid;
     }
 
-    function getUser(uid) {
-      return get(/databases/$(database)/documents/utilisateurs/$(uid)).data;
-    }
-
-    function myRole() {
-      return getUser(request.auth.uid).role;
-    }
-
-    function isCA() {
-      return isAuthenticated() && myRole() == 'charge_affaires';
-    }
-
-    function isTechnicien() {
-      return isAuthenticated() && myRole() == 'technicien';
-    }
-
-    // Un technicien appartient au CA si charge_id == uid du CA
-    function isMyTechnicien(techUid) {
-      return getUser(techUid).charge_id == request.auth.uid;
-    }
-
     // ─── UTILISATEURS ───────────────────────────────────────────────────────
     match /utilisateurs/{uid} {
-      // Chaque utilisateur lit uniquement son propre document
-      allow read: if isOwner(uid);
+      // Tout utilisateur authentifié peut lire tous les profils
+      allow read: if isAuthenticated();
 
-      // Un CA peut lire les documents de ses techniciens
-      allow read: if isCA() && getUser(uid).charge_id == request.auth.uid;
-
-      // Seul l'Admin SDK (agent Python) peut créer/modifier — pas de write client
+      // Seul l'Admin SDK (agent Python) peut créer/modifier
       allow write: if false;
     }
 
     // ─── SAISIES ────────────────────────────────────────────────────────────
     match /saisies/{saisieId} {
-      // Un technicien lit et écrit uniquement ses propres saisies
-      allow read, write: if isTechnicien()
-        && request.auth.uid == resource.data.tech_id;
+      // Tout utilisateur authentifié peut lire toutes les saisies
+      allow read: if isAuthenticated();
 
-      // Autoriser la création (resource n'existe pas encore) si tech_id == uid
-      allow create: if isTechnicien()
+      // Écriture uniquement sur ses propres saisies (tech_id == uid)
+      allow write: if isAuthenticated()
         && request.auth.uid == request.resource.data.tech_id;
-
-      // Un CA peut lire les saisies de ses techniciens
-      allow read: if isCA()
-        && isMyTechnicien(resource.data.tech_id);
     }
 
     // ─── SUPPRESSIONS (queue agent Python) ──────────────────────────────────
     match /suppressions/{uid} {
-      // L'appli peut créer une demande de suppression pour son propre uid
       allow create: if isOwner(uid);
-      // Lecture et suppression réservées à l'Admin SDK
       allow read, delete: if false;
     }
 
