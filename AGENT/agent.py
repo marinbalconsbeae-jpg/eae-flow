@@ -116,8 +116,7 @@ def envoyer_email(config, destinataire_email, destinataire_nom, sujet, corps_htm
                 part.add_header("Content-Disposition", f"attachment; filename={Path(chemin_fichier).name}")
                 msg.attach(part)
 
-        with smtplib.SMTP(config["email"]["smtp_host"], config["email"]["smtp_port"]) as serveur:
-            serveur.starttls()
+        with smtplib.SMTP_SSL(config["email"]["smtp_host"], 465, timeout=10) as serveur:
             serveur.login(config["email"]["smtp_user"], config["email"]["smtp_password"])
             serveur.send_message(msg)
 
