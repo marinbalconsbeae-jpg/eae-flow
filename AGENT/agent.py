@@ -16,6 +16,7 @@ import schedule
 import time
 import logging
 import anthropic
+import resend
 from firebase_client import (
     charger_techniciens as fb_charger_techniciens,
     charger_charges_affaires as fb_charger_charges_affaires,
@@ -93,33 +94,33 @@ def saisies_de_la_semaine(saisies):
 
 # ─── ENVOI D'EMAILS ───────────────────────────────────────────────────────────
 def envoyer_email(config, destinataire_email, destinataire_nom, sujet, corps_html, pieces_jointes=None):
-    """Envoie un email via SMTP."""
+    """Envoie un email via l'API Resend."""
     try:
         if TEST_EMAIL_REDIRECT:
             sujet = f"[TEST >> {destinataire_email}] {sujet}"
             destinataire_email = TEST_EMAIL_REDIRECT
 
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = sujet
-        msg["From"] = config["email"]["expediteur"]
-        msg["To"] = destinataire_email
+        resend.api_key = os.environ.get("RESEND_API_KEY", "")
 
-        msg.attach(MIMEText(corps_html, "html", "utf-8"))
+        params = {
+            "from": "noreply@resend.dev",
+            "to": [destinataire_email],
+            "subject": sujet,
+            "html": corps_html,
+        }
 
-        # Pièces jointes
         if pieces_jointes:
+            attachments = []
             for chemin_fichier in pieces_jointes:
                 with open(chemin_fichier, "rb") as f:
-                    part = MIMEBase("application", "octet-stream")
-                    part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header("Content-Disposition", f"attachment; filename={Path(chemin_fichier).name}")
-                msg.attach(part)
+                    import base64
+                    attachments.append({
+                        "filename": Path(chemin_fichier).name,
+                        "content": base64.b64encode(f.read()).decode("utf-8"),
+                    })
+            params["attachments"] = attachments
 
-        with smtplib.SMTP_SSL(config["email"]["smtp_host"], 465, timeout=10) as serveur:
-            serveur.login(config["email"]["smtp_user"], config["email"]["smtp_password"])
-            serveur.send_message(msg)
-
+        resend.Emails.send(params)
         log.info(f"Email envoyé à {destinataire_nom} ({destinataire_email}) : {sujet}")
         return True
 
