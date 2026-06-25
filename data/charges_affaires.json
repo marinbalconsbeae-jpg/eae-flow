@@ -1,0 +1,8 @@
+[
+  { "id": "ca1", "nom": "LEPLAT", "prenom": "Caroline", "email": "caroline.leplat@sbeae.com" },
+  { "id": "ca2", "nom": "DOUARAN", "prenom": "Paul", "email": "paul.douaran@sbeae.com" },
+  { "id": "ca3", "nom": "DOUARAN", "prenom": "Mathilde", "email": "mathilde.douaran@sbeae.com" },
+  { "id": "ca4", "nom": "DUPOND", "prenom": "Jean", "email": "jean.dupond@sbeae.com" },
+  { "id": "ca5", "nom": "BLANC", "prenom": "Michel", "email": "michel.blanc@sbeae.com" },
+  { "id": "ca6", "nom": "DUFOUR", "prenom": "Sabine", "email": "sabine.dufour@sbeae.com" }
+]

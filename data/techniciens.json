@@ -1,0 +1,10 @@
+[
+  { "id": "t1", "nom": "ASSADI", "prenom": "Ahmad", "email": "ahmad.assadi@sbeae.com", "mission": "RT_Compteur_Module", "fournisseur": "Iléo", "charge_id": "ca1" },
+  { "id": "t2", "nom": "RINGARD", "prenom": "François", "email": "francois.ringard@sbeae.com", "mission": "RT_Compteur_Module", "fournisseur": "Iléo", "charge_id": "ca1" },
+  { "id": "t3", "nom": "KACZOR", "prenom": "Jessy", "email": "jessy.kaczor@sbeae.com", "mission": "Controle_AC", "fournisseur": "Iléo", "charge_id": "ca1" },
+  { "id": "t4", "nom": "LAMMANI", "prenom": "Omar", "email": "omar.lammani@sbeae.com", "mission": "Controle_AC", "fournisseur": "Iléo", "charge_id": "ca1" },
+  { "id": "t5", "nom": "POIDEVIN", "prenom": "Jérome", "email": "jerome.poidevin@sbeae.com", "mission": "RT_Compteur_Module", "fournisseur": "CUA", "charge_id": "ca2" },
+  { "id": "t6", "nom": "BELHADJI", "prenom": "Mahfoud", "email": "mahfoud.belhadji@sbeae.com", "mission": "RT_Compteur_Module", "fournisseur": "CUA", "charge_id": "ca2" },
+  { "id": "t7", "nom": "COLSON", "prenom": "Maxence", "email": "maxence.colson@sbeae.com", "mission": "Releve_CPT", "fournisseur": "CUA", "charge_id": "ca2" },
+  { "id": "t8", "nom": "BETTY", "prenom": "Alain", "email": "alain.betty@sbeae.com", "mission": "Releve_CPT", "fournisseur": "CUA", "charge_id": "ca2" }
+]

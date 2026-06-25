@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Secrets & config locaux
+AGENT/config.json
+AGENT/firebse_credentials.json.json
+AGENT/*.json.json
+.env
+
+# Exports Excel générés
+AGENT/exports/
+
+# Logs
+*.log
+
+# Node / React
+node_modules/
+app/node_modules/
+app/dist/
+
+# OS
+.DS_Store
+Thumbs.db
