@@ -104,7 +104,7 @@ def lire_lignes_excel(ws):
     for row in ws.iter_rows(min_row=5, max_row=ws.max_row, values_only=False):
         col_d = row[3].value  # colonne D
         col_e = row[4].value  # colonne E
-        if col_d == 1 and col_e and str(col_e).strip():
+        if str(col_d).strip() in ("1", "True", "true", "1.0") and col_e and str(col_e).strip():
             lignes.append({"row": row[0].row, "nom_excel": str(col_e).strip()})
     return lignes
 
@@ -239,8 +239,8 @@ def remplir_excel(semaine=None, annee=None):
 
         cellules_ecrites = []
         for champ_firebase, col_lettre in col_mapping.items():
-            valeur = total.get(champ_firebase, 0)
-            if valeur:
+            valeur = total.get(champ_firebase)
+            if valeur is not None:
                 cell = ws[f"{col_lettre}{row_num}"]
                 cell.value = valeur
                 # Force la couleur noire — la copie d'onglet hérite parfois d'un texte blanc

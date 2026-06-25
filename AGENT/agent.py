@@ -58,15 +58,10 @@ def charger_charges_affaires():
     return fb_charger_charges_affaires()
 
 def charger_saisies():
-    path = DATA_DIR / "saisies.json"
-    if not path.exists():
-        return []
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    raise NotImplementedError("charger_saisies() supprimée — utiliser charger_saisies_du_jour() ou charger_saisies_semaine() depuis firebase_client.")
 
 def sauvegarder_saisies(saisies):
-    with open(DATA_DIR / "saisies.json", "w", encoding="utf-8") as f:
-        json.dump(saisies, f, ensure_ascii=False, indent=2)
+    raise NotImplementedError("sauvegarder_saisies() supprimée — les saisies sont écrites par l'appli web dans Firestore.")
 
 # ─── UTILITAIRES ──────────────────────────────────────────────────────────────
 def get_date_aujourdhui():
@@ -85,18 +80,13 @@ def techniciens_non_saisis(techniciens, saisies):
     """Retourne la liste des techniciens qui n'ont pas saisi aujourd'hui."""
     aujourd_hui = get_date_aujourdhui()
     ids_saisis = {s["tech_id"] for s in saisies if s["date"] == aujourd_hui}
-    return [t for t in techniciens if t["id"] not in ids_saisis]
+    return [t for t in techniciens if t["uid"] not in ids_saisis]
 
 def saisies_du_jour(saisies):
-    """Retourne les saisies d'aujourd'hui."""
-    aujourd_hui = get_date_aujourdhui()
-    return [s for s in saisies if s["date"] == aujourd_hui]
+    raise NotImplementedError("saisies_du_jour() supprimée — utiliser charger_saisies_du_jour() depuis firebase_client.")
 
 def saisies_de_la_semaine(saisies):
-    """Retourne toutes les saisies de la semaine courante."""
-    sem = get_semaine_courante()
-    annee = get_annee_courante()
-    return [s for s in saisies if s.get("semaine") == sem and s.get("annee") == annee]
+    raise NotImplementedError("saisies_de_la_semaine() supprimée — utiliser charger_saisies_semaine() depuis firebase_client.")
 
 # ─── ENVOI D'EMAILS ───────────────────────────────────────────────────────────
 def envoyer_email(config, destinataire_email, destinataire_nom, sujet, corps_html, pieces_jointes=None):
@@ -134,6 +124,24 @@ def envoyer_email(config, destinataire_email, destinataire_nom, sujet, corps_htm
     except Exception as e:
         log.error(f"Erreur envoi email à {destinataire_email} : {e}")
         return False
+
+# ─── SUPPRESSION COMPTES AUTH ─────────────────────────────────────────────────
+def traiter_suppressions():
+    """Supprime les comptes Firebase Auth en queue (écrits par l'appli web)."""
+    from firebase_admin import auth as fb_auth
+    from firebase_client import _get_db
+    db = _get_db()
+    docs = list(db.collection("suppressions").stream())
+    if not docs:
+        return
+    for snap in docs:
+        uid = snap.to_dict().get("uid") or snap.id
+        try:
+            fb_auth.delete_user(uid)
+            log.info(f"Compte Auth supprimé : {uid}")
+        except Exception as e:
+            log.error(f"Erreur suppression Auth {uid} : {e}")
+        snap.reference.delete()
 
 # ─── CHAMPS PAR MISSION ───────────────────────────────────────────────────────
 LABELS_CHAMPS = {
@@ -221,7 +229,7 @@ def generer_analyse_claude(ca, mes_techs, saisies_jour, non_saisis_ids):
     try:
         lignes = []
         for tech in mes_techs:
-            saisie = next((s for s in saisies_jour if s["tech_id"] == tech["id"]), None)
+            saisie = next((s for s in saisies_jour if s["tech_id"] == tech["uid"]), None)
             mission = tech["mission"].replace("_", " ")
             if saisie:
                 champs = {
@@ -236,7 +244,7 @@ def generer_analyse_claude(ca, mes_techs, saisies_jour, non_saisis_ids):
                     "Paniers midi": saisie.get("paniers_midi"),
                     "Paniers soir": saisie.get("paniers_soir"),
                 }
-                stats_str = ", ".join(f"{k}: {v}" for k, v in champs.items() if v)
+                stats_str = ", ".join(f"{k}: {v}" for k, v in champs.items() if v is not None)
                 lignes.append(f"- {tech['prenom']} {tech['nom']} ({mission}) : {stats_str or 'données saisies'}")
             else:
                 lignes.append(f"- {tech['prenom']} {tech['nom']} ({mission}) : NON SAISI")
@@ -277,7 +285,7 @@ def tache_recap_journalier():
     charges = charger_charges_affaires()
     saisies_jour = charger_saisies_du_jour()
     non_saisis = techniciens_non_saisis(techniciens, saisies_jour)
-    non_saisis_ids = {t["id"] for t in non_saisis}
+    non_saisis_ids = {t["uid"] for t in non_saisis}
 
     for ca in charges:
         mes_techs = [t for t in techniciens if t["charge_id"] == ca["id"]]
@@ -287,7 +295,7 @@ def tache_recap_journalier():
         # Construire le tableau HTML des techniciens
         lignes_html = ""
         for tech in mes_techs:
-            saisie = next((s for s in saisies_jour if s["tech_id"] == tech["id"]), None)
+            saisie = next((s for s in saisies_jour if s["tech_id"] == tech["uid"]), None)
             statut_couleur = "#16A34A" if saisie else "#DC2626"
             statut_texte = "Saisi" if saisie else "Non saisi"
 
@@ -309,7 +317,7 @@ def tache_recap_journalier():
             </tr>
             """
 
-        nb_saisis = len(mes_techs) - len([t for t in mes_techs if t["id"] in non_saisis_ids])
+        nb_saisis = len(mes_techs) - len([t for t in mes_techs if t["uid"] in non_saisis_ids])
         nb_total = len(mes_techs)
 
         analyse = generer_analyse_claude(ca, mes_techs, saisies_jour, non_saisis_ids)
@@ -362,10 +370,10 @@ def _formater_stats_mission(saisie, mission):
     parts = []
     for key in CHAMPS_PAR_MISSION.get(mission, []):
         val = saisie.get(key)
-        if val:
+        if val is not None:
             parts.append(f"{LABELS_CHAMPS.get(key, key)} : <strong>{val}</strong>")
     heures = saisie.get("total_heures")
-    if heures:
+    if heures is not None:
         parts.append(f"Heures : <strong>{heures}</strong>")
     html = " · ".join(parts) if parts else "Données saisies"
     commentaires = (saisie.get("commentaires") or "").strip()
@@ -419,11 +427,11 @@ def _calculer_totaux_semaine(techniciens, saisies_sem):
     ]
 
     for tech in techniciens:
-        mes_saisies = [s for s in saisies_sem if s["tech_id"] == tech["id"]]
-        total = {"tech_id": tech["id"], "nb_jours": len(mes_saisies)}
+        mes_saisies = [s for s in saisies_sem if s["tech_id"] == tech["uid"]]
+        total = {"tech_id": tech["uid"], "nb_jours": len(mes_saisies)}
         for champ in champs_numeriques:
             total[champ] = sum(s.get(champ, 0) or 0 for s in mes_saisies)
-        totaux[tech["id"]] = total
+        totaux[tech["uid"]] = total
 
     return totaux
 
@@ -460,7 +468,7 @@ def _remplir_excel(config, techniciens, totaux):
 
         # Trouver les lignes techniciens et remplir les totaux
         for tech in techniciens:
-            total = totaux.get(tech["id"], {})
+            total = totaux.get(tech["uid"], {})
             _remplir_ligne_technicien(ws, tech, total)
 
         # Sauvegarder
@@ -554,7 +562,7 @@ def _envoyer_mails_fournisseurs(config, techniciens, charges, totaux):
 
         lignes_html = ""
         for tech in mes_techs:
-            total = totaux.get(tech["id"], {})
+            total = totaux.get(tech["uid"], {})
             nb_jours = total.get("nb_jours", 0)
 
             lignes_html += f"""
@@ -647,6 +655,9 @@ def demarrer_agent():
     log.info(f"Récap chargés d'aff.  : {horaires['recap_journalier']}")
     log.info(f"Compilation vendredi   : {horaires['compilation_vendredi']}")
     log.info("=" * 50)
+
+    # Traiter les suppressions de comptes en attente
+    traiter_suppressions()
 
     # Planifier les tâches
     schedule.every().day.at(horaires["rappel_saisie"]).do(tache_rappel_techniciens)

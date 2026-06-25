@@ -32,8 +32,10 @@ def _charger_utilisateurs_par_role(role):
     utilisateurs = []
     for doc in docs:
         data = doc.to_dict()
-        # Garantit que l'id du document est accessible via data["id"]
-        data.setdefault("id", doc.id)
+        # Force uid = doc.id (UID Firebase) inconditionnellement — évite qu'un
+        # champ "id" ou "uid" pré-existant avec une valeur différente crée un mismatch
+        data["uid"] = doc.id
+        data["id"] = doc.id  # alias pour compatibilité avec l'agent
         utilisateurs.append(data)
     return utilisateurs
 

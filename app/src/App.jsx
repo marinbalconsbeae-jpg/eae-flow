@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { initializeApp } from "firebase/app";
+import { initializeApp, deleteApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, updateDoc, query, where } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, createUserWithEmailAndPassword, setPersistence, browserSessionPersistence } from "firebase/auth";
 
@@ -299,9 +299,11 @@ const CHAMPS_PAR_MISSION = {
 
 function getDateKey() { return new Date().toISOString().split("T")[0]; }
 function getNumeroSemaine() {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), 0, 1);
-  return Math.ceil(((now - start) / 86400000 + start.getDay() + 1) / 7);
+  // ISO 8601 : semaine 1 = semaine contenant le premier jeudi de l'année
+  const d = new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
 }
 function getSemaineKey() { return `${new Date().getFullYear()}-S${getNumeroSemaine()}`; }
 function getJourActuel() { return (new Date().getDay() + 6) % 7; }
@@ -348,11 +350,22 @@ async function sauvegarderSaisie(techId, data) {
   });
 }
 async function creerTechnicien(caId, form) {
-  const cred = await createUserWithEmailAndPassword(auth, form.email, Math.random().toString(36).slice(-10));
-  await setDoc(doc(db, "utilisateurs", cred.user.uid), { ...form, role: "technicien", charge_id: caId, uid: cred.user.uid, date_creation: new Date().toISOString() });
-  await sendPasswordResetEmail(auth, form.email);
+  // Utilise une app secondaire pour ne pas déconnecter le CA en cours de session
+  const secondaryApp = initializeApp(firebaseConfig, `create-tech-${Date.now()}`);
+  const secondaryAuth = getAuth(secondaryApp);
+  try {
+    const cred = await createUserWithEmailAndPassword(secondaryAuth, form.email, Math.random().toString(36).slice(-10));
+    await setDoc(doc(db, "utilisateurs", cred.user.uid), { ...form, role: "technicien", charge_id: caId, uid: cred.user.uid, date_creation: new Date().toISOString() });
+    await sendPasswordResetEmail(secondaryAuth, form.email);
+  } finally {
+    await deleteApp(secondaryApp);
+  }
 }
-async function supprimerTechnicien(uid) { await deleteDoc(doc(db, "utilisateurs", uid)); }
+async function supprimerTechnicien(uid) {
+  await deleteDoc(doc(db, "utilisateurs", uid));
+  // Enqueue la suppression du compte Auth (traitée par l'agent Python via Admin SDK)
+  await setDoc(doc(db, "suppressions", uid), { uid, demande_le: new Date().toISOString() });
+}
 async function modifierTechnicien(uid, { mission, fournisseur }) {
   await updateDoc(doc(db, "utilisateurs", uid), { mission, fournisseur });
 }
