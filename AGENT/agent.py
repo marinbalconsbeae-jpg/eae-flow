@@ -48,6 +48,9 @@ log = logging.getLogger(__name__)
 
 # ─── CHARGEMENT DES DONNÉES ───────────────────────────────────────────────────
 def charger_config():
+    env_config = os.environ.get("AGENT_CONFIG")
+    if env_config:
+        return json.loads(env_config)
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
