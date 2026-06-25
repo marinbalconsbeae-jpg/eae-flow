@@ -4,6 +4,8 @@ firebase_client.py
 Lecture des données EAE Flow depuis Firestore.
 """
 
+import json
+import os
 import firebase_admin
 from firebase_admin import credentials, firestore
 from google.cloud.firestore_v1 import FieldFilter
@@ -19,7 +21,17 @@ def _get_db():
     global _db
     if _db is None:
         if not firebase_admin._apps:
-            cred = credentials.Certificate(str(CREDS_PATH))
+            env_creds = os.environ.get("FIREBASE_CREDENTIALS")
+            if env_creds:
+                cred = credentials.Certificate(json.loads(env_creds))
+            elif CREDS_PATH.exists():
+                cred = credentials.Certificate(str(CREDS_PATH))
+            else:
+                raise RuntimeError(
+                    "Credentials Firebase introuvables : définir la variable "
+                    "d'environnement FIREBASE_CREDENTIALS ou placer le fichier "
+                    f"{CREDS_PATH.name} dans {BASE_DIR}"
+                )
             firebase_admin.initialize_app(cred)
         _db = firestore.client()
     return _db
