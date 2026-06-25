@@ -7,6 +7,8 @@ __pycache__/
 AGENT/config.json
 AGENT/firebse_credentials.json.json
 AGENT/*.json.json
+*firebase*credentials*.json
+*credentials*.json
 .env
 
 # Exports Excel générés
