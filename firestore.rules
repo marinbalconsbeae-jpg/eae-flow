@@ -10,13 +10,24 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == uid;
     }
 
+    function isCA() {
+      return isAuthenticated()
+        && get(/databases/$(database)/documents/utilisateurs/$(request.auth.uid)).data.role == "charge_affaires";
+    }
+
     // ─── UTILISATEURS ───────────────────────────────────────────────────────
     match /utilisateurs/{uid} {
       // Tout utilisateur authentifié peut lire tous les profils
       allow read: if isAuthenticated();
 
-      // Seul l'Admin SDK (agent Python) peut créer/modifier
-      allow write: if false;
+      // Un CA peut créer un technicien rattaché à lui
+      allow create: if isCA()
+        && request.resource.data.role == "technicien"
+        && request.resource.data.charge_id == request.auth.uid;
+
+      // Un CA peut modifier / supprimer uniquement ses propres techniciens
+      allow update, delete: if isCA()
+        && resource.data.charge_id == request.auth.uid;
     }
 
     // ─── SAISIES ────────────────────────────────────────────────────────────
@@ -31,7 +42,9 @@ service cloud.firestore {
 
     // ─── SUPPRESSIONS (queue agent Python) ──────────────────────────────────
     match /suppressions/{uid} {
-      allow create: if isOwner(uid);
+      // Un CA peut mettre en file la suppression d'un de ses techniciens
+      allow create: if isCA()
+        && get(/databases/$(database)/documents/utilisateurs/$(uid)).data.charge_id == request.auth.uid;
       allow read, delete: if false;
     }
 
@@ -40,7 +53,7 @@ service cloud.firestore {
       // Tout utilisateur authentifié peut lire (dropdowns, agent Python)
       allow read: if isAuthenticated();
       // Tout CA authentifié peut créer/modifier/supprimer
-      allow write: if isAuthenticated();
+      allow write: if isCA();
     }
 
     // Tout le reste est refusé par défaut

@@ -327,21 +327,16 @@ const CHAMPS_PAR_MISSION = {
 };
 
 function getDateKey() { return new Date().toISOString().split("T")[0]; }
-function getNumeroSemaine() {
-  // ISO 8601 : semaine 1 = semaine contenant le premier jeudi de l'année
-  const d = new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()));
-  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-}
-function getSemaineKey() { return `${new Date().getFullYear()}-S${getNumeroSemaine()}`; }
 function getSemaineKeyFromDate(d) {
+  // ISO 8601 : semaine 1 = semaine contenant le premier jeudi de l'année
   const utc = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   utc.setUTCDate(utc.getUTCDate() + 4 - (utc.getUTCDay() || 7));
   const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
   const num = Math.ceil((((utc - yearStart) / 86400000) + 1) / 7);
   return { key: `${utc.getUTCFullYear()}-S${num}`, num, year: utc.getUTCFullYear() };
 }
+function getNumeroSemaine() { return getSemaineKeyFromDate(new Date()).num; }
+function getSemaineKey() { return getSemaineKeyFromDate(new Date()).key; }
 function getSemaineParOffset(offsetWeeks) {
   const d = new Date();
   d.setDate(d.getDate() + offsetWeeks * 7);
@@ -418,9 +413,10 @@ async function creerTechnicien(caId, form) {
   }
 }
 async function supprimerTechnicien(uid) {
-  await deleteDoc(doc(db, "utilisateurs", uid));
-  // Enqueue la suppression du compte Auth (traitée par l'agent Python via Admin SDK)
+  // Enqueue d'abord (la règle Firestore vérifie l'appartenance via le doc utilisateur,
+  // qui doit donc encore exister), puis supprime le profil.
   await setDoc(doc(db, "suppressions", uid), { uid, demande_le: new Date().toISOString() });
+  await deleteDoc(doc(db, "utilisateurs", uid));
 }
 async function modifierTechnicien(uid, { mission, fournisseur }) {
   await updateDoc(doc(db, "utilisateurs", uid), { mission, fournisseur });
@@ -433,8 +429,11 @@ async function chargerFournisseurs() {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 async function creerFournisseur(nom, email) {
-  const id = nom.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
-  await setDoc(doc(db, "fournisseurs", id), { nom, email });
+  const id = nom.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  if (!id) throw new Error("NOM_INVALIDE");
+  const ref = doc(db, "fournisseurs", id);
+  if ((await getDoc(ref)).exists()) throw new Error("DEJA_EXISTANT");
+  await setDoc(ref, { nom, email });
 }
 async function modifierFournisseur(id, email) {
   await updateDoc(doc(db, "fournisseurs", id), { email });
@@ -1022,8 +1021,10 @@ const VueDashboard = ({ user, onVoirProfil }) => {
         setLoading(false);
         // Charge les saisies de la semaine pour chaque technicien en parallèle
         Promise.all(techs.map(t => chargerSaisiesSemaine(t.uid).then(s => [t.uid, s])))
-          .then(results => setSaisiesSemaine(Object.fromEntries(results)));
-      });
+          .then(results => setSaisiesSemaine(Object.fromEntries(results)))
+          .catch(err => console.error("Chargement des saisies hebdo échoué", err));
+      })
+      .catch(err => { console.error("Chargement du dashboard échoué", err); setLoading(false); });
   }, []);
 
   useEffect(() => {
@@ -1378,7 +1379,10 @@ const VueGestion = ({ user }) => {
                 </select>
               </Field>
               <Field label="Fournisseur">
-                <input className="field-input" value={form.fournisseur} onChange={e => setForm(p => ({ ...p, fournisseur: e.target.value }))} required placeholder="Iléo, CUA, Véolia..." />
+                <select className="field-input" value={form.fournisseur} onChange={e => setForm(p => ({ ...p, fournisseur: e.target.value }))} required>
+                  <option value="">— Choisir un fournisseur —</option>
+                  {fournisseursList.map(f => <option key={f} value={f}>{f}</option>)}
+                </select>
               </Field>
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
@@ -1431,7 +1435,7 @@ const VueGestion = ({ user }) => {
                         <select className="field-input" value={editForm.fournisseur}
                           onChange={e => setEditForm(p => ({ ...p, fournisseur: e.target.value }))}
                           style={{ fontSize: 12, padding: "6px 10px" }}>
-                          {(fournisseursList.length ? fournisseursList : FOURNISSEURS).map(f => <option key={f} value={f}>{f}</option>)}
+                          {fournisseursList.map(f => <option key={f} value={f}>{f}</option>)}
                         </select>
                       </td>
                       <td style={{ padding: "10px 16px", textAlign: "center", fontSize: 12, color: T.inkMuted, fontFamily: "'Fira Code', monospace" }}>{tech.email}</td>
@@ -1470,7 +1474,14 @@ const VueGestion = ({ user }) => {
                     <td style={{ padding: "13px 16px", textAlign: "center", whiteSpace: "nowrap" }}>
                       {confirmSuppr === tech.uid ? (
                         <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                          <Btn variant="danger" style={{ fontSize: 11, padding: "3px 10px" }} onClick={async () => { await supprimerTechnicien(tech.uid); setConfirmSuppr(null); recharger(); }}>Confirmer</Btn>
+                          <Btn variant="danger" style={{ fontSize: 11, padding: "3px 10px" }} onClick={async () => {
+                            try {
+                              await supprimerTechnicien(tech.uid);
+                              setSucces(`${tech.prenom} ${tech.nom} supprimé.`);
+                              recharger();
+                            } catch { setErreur("Erreur lors de la suppression du technicien."); }
+                            finally { setConfirmSuppr(null); }
+                          }}>Confirmer</Btn>
                           <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px" }} onClick={() => setConfirmSuppr(null)}>Annuler</Btn>
                         </div>
                       ) : (
@@ -1811,7 +1822,11 @@ const VueFournisseurs = ({ user }) => {
       setShowForm(false);
       setForm({ nom: "", email: "" });
       recharger();
-    } catch { setErreur("Erreur lors de la création. Ce nom existe peut-être déjà."); }
+    } catch (e) {
+      if (e.message === "NOM_INVALIDE") setErreur("Nom invalide : utilisez au moins une lettre ou un chiffre.");
+      else if (e.message === "DEJA_EXISTANT") setErreur("Un fournisseur portant ce nom existe déjà.");
+      else setErreur("Erreur lors de la création du fournisseur.");
+    }
     finally { setSaving(false); }
   };
 
@@ -1885,7 +1900,7 @@ const VueFournisseurs = ({ user }) => {
                       <td style={{ padding: "10px 16px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                           <div style={{ width: 32, height: 32, borderRadius: 9, background: T.blue, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <span style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>{four.nom[0].toUpperCase()}</span>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>{(four.nom?.[0] ?? "?").toUpperCase()}</span>
                           </div>
                           <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{four.nom}</span>
                         </div>
@@ -1919,7 +1934,7 @@ const VueFournisseurs = ({ user }) => {
                     <td style={{ padding: "13px 16px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <div style={{ width: 32, height: 32, borderRadius: 9, background: T.blue + "18", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: T.blue }}>{four.nom[0].toUpperCase()}</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: T.blue }}>{(four.nom?.[0] ?? "?").toUpperCase()}</span>
                         </div>
                         <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{four.nom}</span>
                       </div>
@@ -1929,10 +1944,12 @@ const VueFournisseurs = ({ user }) => {
                       {confirmSuppr === four.id ? (
                         <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                           <Btn variant="danger" style={{ fontSize: 11, padding: "3px 10px" }} onClick={async () => {
-                            await supprimerFournisseur(four.id);
-                            setConfirmSuppr(null);
-                            setSucces(`${four.nom} supprimé.`);
-                            recharger();
+                            try {
+                              await supprimerFournisseur(four.id);
+                              setSucces(`${four.nom} supprimé.`);
+                              recharger();
+                            } catch { setErreur("Erreur lors de la suppression du fournisseur."); }
+                            finally { setConfirmSuppr(null); }
                           }}>Confirmer</Btn>
                           <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px" }} onClick={() => setConfirmSuppr(null)}>Annuler</Btn>
                         </div>

@@ -568,7 +568,13 @@ def tache_recap_hebdo_fournisseur():
 
     for four in fournisseurs:
         nom_four = four.get("nom", "")
-        ses_techs = [t for t in techniciens if t.get("fournisseur") == nom_four]
+        email_four = four.get("email")
+        if not email_four:
+            log.warning(f"Fournisseur '{nom_four}' sans email — mail ignoré")
+            continue
+        # Comparaison insensible à la casse et aux espaces pour tolérer les saisies manuelles
+        cle_four = nom_four.strip().casefold()
+        ses_techs = [t for t in techniciens if (t.get("fournisseur") or "").strip().casefold() == cle_four]
         if not ses_techs:
             log.info(f"Aucun technicien pour le fournisseur '{nom_four}' — mail ignoré")
             continue
@@ -588,7 +594,7 @@ def tache_recap_hebdo_fournisseur():
             </tr>"""
 
         nb_actifs = sum(1 for t in ses_techs if totaux.get(t["uid"], {}).get("nb_jours", 0) > 0)
-        contact = four.get("contact", four["nom"])
+        contact = four.get("contact") or nom_four or "Madame, Monsieur"
 
         sujet = f"Bilan semaine S{semaine}/{annee} — Techniciens SBEAE"
         corps = f"""
@@ -623,7 +629,7 @@ def tache_recap_hebdo_fournisseur():
         </div>
         </body></html>
         """
-        envoyer_email(config, four["email"], contact, sujet, corps)
+        envoyer_email(config, email_four, contact, sujet, corps)
 
     log.info("=== Récap hebdo fournisseurs terminé ===")
 
@@ -665,7 +671,7 @@ def demarrer_agent():
     log.info(f"Récap hebdo fournisseurs : vendredi {horaire_hebdo}")
     log.info("=" * 50)
 
-    # Traiter les suppressions de comptes en attente
+    # Traiter les suppressions de comptes en attente (puis toutes les heures)
     traiter_suppressions()
 
     # Planifier les tâches
@@ -673,6 +679,7 @@ def demarrer_agent():
     schedule.every().day.at(horaires["recap_journalier"]).do(tache_recap_journalier)
     schedule.every().friday.at(horaire_hebdo).do(tache_recap_hebdo_ca)
     schedule.every().friday.at(horaire_hebdo).do(tache_recap_hebdo_fournisseur)
+    schedule.every().hour.do(traiter_suppressions)
 
     # Boucle principale
     while True:
