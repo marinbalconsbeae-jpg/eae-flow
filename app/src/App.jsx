@@ -18,35 +18,44 @@ const auth = getAuth(firebaseApp);
 setPersistence(auth, browserSessionPersistence);
 
 // ─── DESIGN TOKENS ────────────────────────────────────────────────────────────
-// Palette industrielle eau — sobre, précis, terrain
+// Data-Dense Dashboard — navy professionnel + accent bleu (ui-ux-pro-max)
 const T = {
-  // Couleurs
-  bg: "#F5F6F8",
+  // Surfaces & neutres — échelle slate
+  bg: "#F8FAFC",
+  bgSubtle: "#FCFDFE",
   surface: "#FFFFFF",
-  surfaceHover: "#F8F9FB",
-  border: "#E4E6EA",
-  borderHover: "#C8CBD2",
+  surfaceHover: "#F1F5F9",
+  border: "#E2E8F0",
+  borderSubtle: "#EDF1F6",
+  borderHover: "#CBD5E1",
 
-  ink: "#0D1117",
-  inkMid: "#3D4450",
-  inkSub: "#6B7280",
-  inkMuted: "#9CA3AF",
+  ink: "#020617",
+  inkMid: "#334155",
+  inkSub: "#64748B",
+  inkMuted: "#94A3B8",
 
-  blue: "#1A56DB",
-  blueLight: "#EBF2FF",
-  blueMid: "#3B7EFF",
+  // Navy (primary) — header, surfaces sombres, emphase
+  navy: "#0F172A",
+  navyMid: "#1E293B",
+  navyLine: "#243349",
 
-  green: "#12B76A",
-  greenLight: "#ECFDF5",
-  red: "#F04438",
-  redLight: "#FEF3F2",
-  amber: "#F59E0B",
+  // Accent / CTA — bleu profond
+  blue: "#0369A1",
+  blueDeep: "#075985",
+  blueLight: "#E0F2FE",
+  blueMid: "#0284C7",
+
+  green: "#0EA968",
+  greenLight: "#E9FBF3",
+  red: "#DC2626",
+  redLight: "#FEF2F2",
+  amber: "#D97706",
   amberLight: "#FFFBEB",
 
-  // Missions
+  // Missions — palette catégorielle
   missions: {
-    RT_Compteur_Module: "#1A56DB",
-    Releve_CPT: "#6D28D9",
+    RT_Compteur_Module: "#0369A1",
+    Releve_CPT: "#7C3AED",
     Controle_AC: "#B45309",
     RT_CPT_Arras: "#0891B2",
     RT_CPT_SEPIG: "#0E7490",
@@ -56,6 +65,13 @@ const T = {
     Controle_ANC: "#059669",
   },
 
+  // Élévation — ombres douces et superposées (style SaaS moderne)
+  shadowXs: "0 1px 2px rgba(10,14,23,0.04)",
+  shadowSm: "0 1px 3px rgba(10,14,23,0.06), 0 1px 2px -1px rgba(10,14,23,0.04)",
+  shadowMd: "0 4px 10px -2px rgba(10,14,23,0.08), 0 2px 4px -2px rgba(10,14,23,0.05)",
+  shadowLg: "0 14px 28px -8px rgba(10,14,23,0.12), 0 6px 12px -6px rgba(10,14,23,0.07)",
+  shadowXl: "0 28px 56px -16px rgba(10,14,23,0.22)",
+
   // Easings Emil
   easeOut: "cubic-bezier(0.23, 1, 0.32, 1)",
   easeInOut: "cubic-bezier(0.77, 0, 0.175, 1)",
@@ -64,24 +80,29 @@ const T = {
 // ─── STYLES GLOBAUX ───────────────────────────────────────────────────────────
 const GlobalStyles = () => (
   <style>{`
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html { -webkit-font-smoothing: antialiased; }
+    html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
     body {
-      font-family: 'IBM Plex Sans', system-ui, sans-serif;
+      font-family: 'Fira Sans', system-ui, sans-serif;
       background: ${T.bg};
       color: ${T.ink};
+      letter-spacing: -0.006em;
     }
     input, textarea, button, select { font-family: inherit; }
 
+    /* Chiffres tabulaires partout en monospace — évite le décalage des colonnes */
+    [style*="Fira Code"] { font-feature-settings: "tnum" 1, "zero" 1; font-variant-numeric: tabular-nums; }
+
     /* Scrollbar subtile */
-    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: ${T.border}; border-radius: 99px; }
+    ::-webkit-scrollbar-thumb { background: ${T.border}; border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
+    ::-webkit-scrollbar-thumb:hover { background: ${T.borderHover}; background-clip: padding-box; }
 
     /* Focus visible propre */
-    :focus-visible { outline: 2px solid ${T.blue}; outline-offset: 2px; border-radius: 4px; }
+    :focus-visible { outline: 2px solid ${T.blue}; outline-offset: 2px; border-radius: 6px; }
     button:focus:not(:focus-visible) { outline: none; }
 
     /* Animations globales */
@@ -112,7 +133,14 @@ const GlobalStyles = () => (
     .table-row:hover { background: ${T.surfaceHover} !important; }
 
     /* Btn press feedback */
+    .btn-press { transition: transform 140ms ${T.easeOut}, box-shadow 180ms ease, opacity 150ms ease, background 150ms ease; }
     .btn-press:active { transform: scale(0.97); }
+
+    /* Card hover lift — élévation au survol */
+    .card-lift { transition: box-shadow 220ms ${T.easeOut}, transform 220ms ${T.easeOut}, border-color 220ms ease; }
+    @media (hover: hover) and (pointer: fine) {
+      .card-lift:hover { box-shadow: ${T.shadowMd}; transform: translateY(-1px); border-color: ${T.borderHover}; }
+    }
 
     /* Stagger children */
     .stagger > *:nth-child(1) { animation-delay: 0ms; }
@@ -128,27 +156,28 @@ const GlobalStyles = () => (
     /* Input styles */
     .field-input {
       width: 100%;
-      border: 1.5px solid ${T.border};
-      border-radius: 8px;
-      padding: 9px 12px;
+      border: 1px solid ${T.border};
+      border-radius: 10px;
+      padding: 10px 13px;
       font-size: 14px;
       color: ${T.ink};
       background: ${T.surface};
+      box-shadow: ${T.shadowXs};
       transition: border-color 150ms ease, box-shadow 150ms ease;
     }
     .field-input:hover { border-color: ${T.borderHover}; }
     .field-input:focus {
       outline: none;
       border-color: ${T.blue};
-      box-shadow: 0 0 0 3px ${T.blueLight};
+      box-shadow: 0 0 0 3.5px ${T.blueLight};
     }
     .field-input::placeholder { color: ${T.inkMuted}; }
-    .field-input:disabled { opacity: 0.5; cursor: not-allowed; background: ${T.bg}; }
+    .field-input:disabled { opacity: 0.55; cursor: not-allowed; background: ${T.bgSubtle}; box-shadow: none; }
 
     /* Voyant animé */
     @keyframes voyantPulse {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(240, 68, 56, 0.4); }
-      50% { box-shadow: 0 0 0 4px rgba(240, 68, 56, 0); }
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45); }
+      50% { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -306,6 +335,18 @@ function getNumeroSemaine() {
   return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
 }
 function getSemaineKey() { return `${new Date().getFullYear()}-S${getNumeroSemaine()}`; }
+function getSemaineKeyFromDate(d) {
+  const utc = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  utc.setUTCDate(utc.getUTCDate() + 4 - (utc.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+  const num = Math.ceil((((utc - yearStart) / 86400000) + 1) / 7);
+  return { key: `${utc.getUTCFullYear()}-S${num}`, num, year: utc.getUTCFullYear() };
+}
+function getSemaineParOffset(offsetWeeks) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetWeeks * 7);
+  return getSemaineKeyFromDate(d);
+}
 function getJourActuel() { return (new Date().getDay() + 6) % 7; }
 function getDateDuJour(jourIdx) {
   const now = new Date();
@@ -332,6 +373,21 @@ async function chargerSaisiesSemaine(techId) {
   const r = {};
   snap.forEach(d => { r[d.data().date] = d.data(); });
   return r;
+}
+async function chargerHistoriqueSemaine(caId, semaineKey) {
+  const techs = await chargerMesTechniciens(caId);
+  const techUids = new Set(techs.map(t => t.uid));
+  const q = query(collection(db, "saisies"), where("semaine", "==", semaineKey));
+  const snap = await getDocs(q);
+  const saisiesParTech = {};
+  snap.forEach(d => {
+    const data = d.data();
+    if (techUids.has(data.tech_id)) {
+      if (!saisiesParTech[data.tech_id]) saisiesParTech[data.tech_id] = [];
+      saisiesParTech[data.tech_id].push(data);
+    }
+  });
+  return { techs, saisiesParTech };
 }
 async function chargerMesTechniciens(caId) {
   const q = query(collection(db, "utilisateurs"), where("role", "==", "technicien"), where("charge_id", "==", caId));
@@ -388,11 +444,11 @@ const Voyant = ({ saisi, size = 8 }) => (
 );
 
 // Badge mission avec monospace pour les chiffres
-const Badge = ({ couleur, label, small }) => (
+const Badge = ({ couleur, label, small, onDark }) => (
   <span style={{
-    background: couleur + "14",
-    color: couleur,
-    border: `1px solid ${couleur}28`,
+    background: onDark ? "rgba(255,255,255,0.10)" : couleur + "14",
+    color: onDark ? "#E2E8F0" : couleur,
+    border: `1px solid ${onDark ? "rgba(255,255,255,0.16)" : couleur + "28"}`,
     borderRadius: 6,
     padding: small ? "1px 7px" : "2px 9px",
     fontSize: small ? 10 : 11,
@@ -404,12 +460,12 @@ const Badge = ({ couleur, label, small }) => (
 );
 
 // Card avec hover subtil
-const Card = ({ children, style, animate }) => (
-  <div style={{
+const Card = ({ children, style, animate, hover }) => (
+  <div className={hover ? "card-lift" : undefined} style={{
     background: T.surface,
-    borderRadius: 12,
+    borderRadius: 14,
     border: `1px solid ${T.border}`,
-    boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+    boxShadow: T.shadowSm,
     overflow: "hidden",
     animation: animate ? `fadeUp 280ms ${T.easeOut} both` : "none",
     ...style,
@@ -421,14 +477,15 @@ const Avatar = ({ prenom, nom, couleur, size = 36 }) => (
   <div style={{
     width: size, height: size,
     borderRadius: "50%",
-    background: couleur + "18",
+    background: `linear-gradient(135deg, ${couleur}22, ${couleur}12)`,
     color: couleur,
     display: "flex", alignItems: "center", justifyContent: "center",
     fontSize: Math.round(size * 0.32),
     fontWeight: 700,
     flexShrink: 0,
-    fontFamily: "'IBM Plex Mono', monospace",
+    fontFamily: "'Fira Code', monospace",
     letterSpacing: "-0.02em",
+    boxShadow: `inset 0 0 0 1px ${couleur}1f`,
     transition: `background 200ms ${T.easeOut}`,
   }}>
     {prenom?.[0]}{nom?.[0]}
@@ -438,22 +495,21 @@ const Avatar = ({ prenom, nom, couleur, size = 36 }) => (
 // Bouton avec feedback press
 const Btn = ({ children, onClick, variant = "primary", style, disabled, type = "button", loading }) => {
   const variants = {
-    primary: { background: T.blue, color: "#fff", border: "none", boxShadow: `0 1px 2px rgba(26,86,219,0.3)` },
-    secondary: { background: T.surface, color: T.inkMid, border: `1.5px solid ${T.border}` },
-    ghost: { background: "transparent", color: T.inkSub, border: "1.5px solid transparent" },
-    danger: { background: T.redLight, color: T.red, border: `1.5px solid #FECDCA` },
+    primary: { background: `linear-gradient(180deg, ${T.blueMid}, ${T.blue})`, color: "#fff", border: `1px solid ${T.blueDeep}`, boxShadow: `${T.shadowSm}, inset 0 1px 0 rgba(255,255,255,0.18)` },
+    secondary: { background: T.surface, color: T.inkMid, border: `1px solid ${T.border}`, boxShadow: T.shadowXs },
+    ghost: { background: "transparent", color: T.inkSub, border: "1px solid transparent" },
+    danger: { background: T.redLight, color: T.red, border: `1px solid #FECDCA`, boxShadow: T.shadowXs },
   };
   return (
     <button type={type} onClick={onClick} disabled={disabled || loading} className="btn-press" style={{
       ...variants[variant],
-      borderRadius: 8,
+      borderRadius: 9,
       padding: "8px 16px",
       fontSize: 13,
       fontWeight: 600,
       cursor: (disabled || loading) ? "not-allowed" : "pointer",
       opacity: (disabled || loading) ? 0.55 : 1,
       display: "inline-flex", alignItems: "center", gap: 7,
-      transition: `opacity 150ms ease, transform 100ms ${T.easeOut}, box-shadow 150ms ease`,
       whiteSpace: "nowrap",
       ...style,
     }}>
@@ -490,7 +546,7 @@ const StatBlock = ({ value, label, couleur, style }) => (
     <div style={{
       fontSize: 32, fontWeight: 700,
       color: couleur || T.ink,
-      fontFamily: "'IBM Plex Mono', monospace",
+      fontFamily: "'Fira Code', monospace",
       lineHeight: 1,
       marginBottom: 6,
       transition: `color 300ms ${T.easeOut}`,
@@ -561,41 +617,48 @@ const VueConnexion = ({ onLogin }) => {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#0B1220", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <div style={{ minHeight: "100dvh", background: "#080C16", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", overflow: "hidden" }}>
       {/* Grille décorative subtile */}
       <div style={{
         position: "fixed", inset: 0, pointerEvents: "none",
-        backgroundImage: "radial-gradient(circle at 1px 1px, rgba(255,255,255,0.04) 1px, transparent 0)",
+        backgroundImage: "radial-gradient(circle at 1px 1px, rgba(255,255,255,0.035) 1px, transparent 0)",
         backgroundSize: "32px 32px",
       }} />
+      {/* Halo ambiant bleu */}
+      <div style={{
+        position: "fixed", top: "-10%", left: "50%", transform: "translateX(-50%)",
+        width: 620, height: 620, pointerEvents: "none",
+        background: `radial-gradient(circle, ${T.blue}33 0%, transparent 60%)`,
+        filter: "blur(40px)",
+      }} />
 
-      <div style={{ width: "100%", maxWidth: 380, animation: `fadeUp 350ms ${T.easeOut} both` }}>
+      <div style={{ width: "100%", maxWidth: 384, position: "relative", animation: `fadeUp 350ms ${T.easeOut} both` }}>
         {/* Logo */}
-        <div style={{ textAlign: "center", marginBottom: 40 }}>
+        <div style={{ textAlign: "center", marginBottom: 36 }}>
           <div style={{
-            width: 52, height: 52,
-            background: "linear-gradient(135deg, #1A56DB 0%, #3B7EFF 100%)",
-            borderRadius: 14,
-            margin: "0 auto 16px",
+            width: 56, height: 56,
+            background: `linear-gradient(135deg, ${T.blueMid} 0%, ${T.blueDeep} 100%)`,
+            borderRadius: 16,
+            margin: "0 auto 18px",
             display: "flex", alignItems: "center", justifyContent: "center",
-            boxShadow: "0 4px 20px rgba(26,86,219,0.4)",
+            boxShadow: `0 8px 28px ${T.blue}55, inset 0 1px 0 rgba(255,255,255,0.25)`,
           }}>
-            <svg width="24" height="24" fill="none" stroke="#fff" strokeWidth="2" viewBox="0 0 24 24">
+            <svg width="26" height="26" fill="none" stroke="#fff" strokeWidth="2" viewBox="0 0 24 24">
               <path d="M12 2C8 2 4 5.5 4 10c0 6 8 12 8 12s8-6 8-12c0-4.5-4-8-8-8z" strokeLinejoin="round"/>
               <circle cx="12" cy="10" r="2.5" fill="#fff" stroke="none"/>
             </svg>
           </div>
-          <h1 style={{ color: "#F1F5F9", fontSize: 22, fontWeight: 700, margin: "0 0 5px", letterSpacing: "-0.02em" }}>EAE Flow</h1>
-          <p style={{ color: "#475569", fontSize: 13 }}>Suivi hebdomadaire · Techniciens terrain</p>
+          <h1 style={{ color: "#F8FAFC", fontSize: 24, fontWeight: 700, margin: "0 0 6px", letterSpacing: "-0.03em" }}>EAE Flow</h1>
+          <p style={{ color: "#64748B", fontSize: 13 }}>Suivi hebdomadaire · Techniciens terrain</p>
         </div>
 
         {/* Card connexion */}
         <div style={{
-          background: "#131C2E",
-          border: "1px solid rgba(255,255,255,0.08)",
-          borderRadius: 16,
-          padding: 28,
-          boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+          background: "linear-gradient(180deg, #141E33 0%, #111A2C 100%)",
+          border: "1px solid rgba(255,255,255,0.09)",
+          borderRadius: 18,
+          padding: 30,
+          boxShadow: "0 24px 64px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.06)",
         }}>
           {!reinit ? (
             <>
@@ -681,32 +744,34 @@ const Header = ({ user, onLogout, page, onChangePage }) => {
 
   return (
     <header style={{
-      background: T.surface,
-      borderBottom: `1px solid ${T.border}`,
+      background: `linear-gradient(180deg, ${T.navy}, ${T.navyMid})`,
+      borderBottom: `1px solid ${T.navyLine}`,
       padding: "0 24px",
       display: "flex", alignItems: "center", justifyContent: "space-between",
-      height: 56,
+      height: 60,
       position: "sticky", top: 0, zIndex: 100,
-      boxShadow: "0 1px 0 rgba(0,0,0,0.05)",
+      boxShadow: T.shadowMd,
     }}>
       {/* Logo + Nav */}
-      <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 9, paddingRight: 20, borderRight: `1px solid ${T.border}` }}>
-          <div style={{ width: 26, height: 26, background: T.blue, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <svg width="13" height="13" fill="none" stroke="#fff" strokeWidth="2" viewBox="0 0 24 24">
+      <div style={{ display: "flex", alignItems: "center", gap: 22 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, paddingRight: 22, borderRight: `1px solid ${T.navyLine}` }}>
+          <div style={{ width: 30, height: 30, background: `linear-gradient(135deg, ${T.blueMid}, ${T.blueDeep})`, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: `0 2px 10px ${T.blue}66, inset 0 1px 0 rgba(255,255,255,0.25)` }}>
+            <svg width="15" height="15" fill="none" stroke="#fff" strokeWidth="2" viewBox="0 0 24 24">
               <path d="M12 2C8 2 4 5.5 4 10c0 6 8 12 8 12s8-6 8-12c0-4.5-4-8-8-8z" strokeLinejoin="round"/>
             </svg>
           </div>
-          <span style={{ fontWeight: 700, fontSize: 13, color: T.ink, letterSpacing: "-0.01em" }}>EAE Flow</span>
+          <span style={{ fontWeight: 700, fontSize: 14, color: "#F8FAFC", letterSpacing: "-0.02em" }}>EAE Flow</span>
         </div>
 
         <nav style={{ display: "flex", gap: 2 }}>
           {navItems.map(item => (
-            <button key={item.id} onClick={() => onChangePage(item.id)} style={{
-              background: page === item.id ? T.blueLight : "transparent",
-              color: page === item.id ? T.blue : T.inkSub,
-              border: "none", borderRadius: 7,
-              padding: "5px 13px", fontSize: 13,
+            <button key={item.id} onClick={() => onChangePage(item.id)} className="btn-press" style={{
+              background: page === item.id ? "rgba(255,255,255,0.10)" : "transparent",
+              color: page === item.id ? "#FFFFFF" : "#94A3B8",
+              border: "1px solid transparent",
+              boxShadow: page === item.id ? `inset 0 0 0 1px ${T.navyLine}` : "none",
+              borderRadius: 8,
+              padding: "6px 14px", fontSize: 13,
               fontWeight: page === item.id ? 600 : 500,
               cursor: "pointer",
               transition: `background 150ms ${T.easeOut}, color 150ms ${T.easeOut}`,
@@ -717,20 +782,20 @@ const Header = ({ user, onLogout, page, onChangePage }) => {
 
       {/* Profil */}
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        {mission && <Badge couleur={mission.couleur} label={mission.label} />}
+        {mission && <Badge couleur={mission.couleur} label={mission.label} onDark />}
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{user.prenom} {user.nom}</div>
-          <div style={{ fontSize: 11, color: T.inkMuted }}>{{ technicien: "Technicien", charge_affaires: "Chargé d'affaires" }[user.role] || user.role}</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#F1F5F9" }}>{user.prenom} {user.nom}</div>
+          <div style={{ fontSize: 11, color: "#7C879B" }}>{{ technicien: "Technicien", charge_affaires: "Chargé d'affaires" }[user.role] || user.role}</div>
         </div>
         <button
           onClick={async () => { await signOut(auth); window.location.reload(); }}
           title="Changer de compte"
-          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: T.inkMuted, padding: "4px 6px", borderRadius: 5, transition: `color 150ms ease` }}
-          onMouseOver={e => e.currentTarget.style.color = T.inkSub}
-          onMouseOut={e => e.currentTarget.style.color = T.inkMuted}
+          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#7C879B", padding: "4px 6px", borderRadius: 5, transition: `color 150ms ease` }}
+          onMouseOver={e => e.currentTarget.style.color = "#CBD5E1"}
+          onMouseOut={e => e.currentTarget.style.color = "#7C879B"}
         >Changer de compte</button>
         <button onClick={onLogout} title="Déconnexion" style={{ background: "none", border: "none", cursor: "pointer", padding: 0, borderRadius: "50%" }}>
-          <Avatar prenom={user.prenom} nom={user.nom} couleur={isTech ? T.blue : T.green} size={34} />
+          <Avatar prenom={user.prenom} nom={user.nom} couleur={isTech ? T.blueMid : T.green} size={34} />
         </button>
       </div>
     </header>
@@ -822,7 +887,7 @@ const VueSaisie = ({ user }) => {
                   disabled={dejaModifie}
                   onChange={e => setForm(p => ({ ...p, [champ.key]: champ.type === "number" ? Number(e.target.value) : e.target.value }))}
                   className="field-input"
-                  style={{ fontFamily: champ.type === "number" ? "'IBM Plex Mono', monospace" : "inherit", fontWeight: champ.type === "number" ? 500 : 400 }}
+                  style={{ fontFamily: champ.type === "number" ? "'Fira Code', monospace" : "inherit", fontWeight: champ.type === "number" ? 500 : 400 }}
                   placeholder="0"
                 />
               </Field>
@@ -885,7 +950,7 @@ const VueMonSuivi = ({ user }) => {
               </div>
               {saisie && champsPrincipaux[0] && (
                 <>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: T.ink, fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1, marginBottom: 3 }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: T.ink, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 3 }}>
                     {saisie[champsPrincipaux[0].key] || 0}
                   </div>
                   <div style={{ fontSize: 9, color: T.inkMuted, lineHeight: 1.3 }}>{champsPrincipaux[0].label}</div>
@@ -909,7 +974,7 @@ const VueMonSuivi = ({ user }) => {
                 padding: "20px 16px", textAlign: "center",
                 borderRight: i < champsPrincipaux.length - 1 ? `1px solid ${T.border}` : "none",
               }}>
-                <div style={{ fontSize: 34, fontWeight: 700, color: mission?.couleur, fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1, marginBottom: 6 }}>
+                <div style={{ fontSize: 34, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 6 }}>
                   {total}
                 </div>
                 <div style={{ fontSize: 11, color: T.inkSub, fontWeight: 500 }}>{champ.label}</div>
@@ -926,6 +991,7 @@ const VueMonSuivi = ({ user }) => {
 const VueDashboard = ({ user, onVoirProfil }) => {
   const [techniciens, setTechniciens] = useState([]);
   const [saisiesJour, setSaisiesJour] = useState({});
+  const [saisiesSemaine, setSaisiesSemaine] = useState({});
   const [tousTechs, setTousTechs] = useState([]);
   const [recherche, setRecherche] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
@@ -934,7 +1000,15 @@ const VueDashboard = ({ user, onVoirProfil }) => {
 
   useEffect(() => {
     Promise.all([chargerMesTechniciens(user.uid), chargerSaisiesJour(), chargerTousTechniciens()])
-      .then(([techs, saisies, tous]) => { setTechniciens(techs); setSaisiesJour(saisies); setTousTechs(tous); setLoading(false); });
+      .then(([techs, saisies, tous]) => {
+        setTechniciens(techs);
+        setSaisiesJour(saisies);
+        setTousTechs(tous);
+        setLoading(false);
+        // Charge les saisies de la semaine pour chaque technicien en parallèle
+        Promise.all(techs.map(t => chargerSaisiesSemaine(t.uid).then(s => [t.uid, s])))
+          .then(results => setSaisiesSemaine(Object.fromEntries(results)));
+      });
   }, []);
 
   useEffect(() => {
@@ -976,7 +1050,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
                   transition: `width 600ms ${T.easeOut}`,
                 }} />
               </div>
-              <span style={{ fontSize: 12, color: T.inkSub, fontFamily: "'IBM Plex Mono', monospace" }}>
+              <span style={{ fontSize: 12, color: T.inkSub, fontFamily: "'Fira Code', monospace" }}>
                 {nbSaisi}/{techniciens.length}
               </span>
             </div>
@@ -1059,7 +1133,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ fontSize: 11, color: T.inkSub }}>Total jour :</span>
                 <span style={{
-                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontFamily: "'Fira Code', monospace",
                   fontSize: 14, fontWeight: 700,
                   color: mission?.couleur,
                   background: (mission?.couleur || T.blue) + "12",
@@ -1109,7 +1183,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
                               fontSize: ci === 0 ? 16 : 14,
                               fontWeight: ci === 0 ? 700 : 600,
                               color: saisie ? (ci === 0 ? mission?.couleur : T.inkMid) : T.border,
-                              fontFamily: "'IBM Plex Mono', monospace",
+                              fontFamily: "'Fira Code', monospace",
                             }}>
                               {saisie ? (saisie[champ.key] ?? 0) : "—"}
                             </span>
@@ -1148,6 +1222,73 @@ const VueDashboard = ({ user, onVoirProfil }) => {
           </div>
         );
       })}
+
+      {/* ── VUE SEMAINE ─────────────────────────────────────────────────── */}
+      {techniciens.length > 0 && (
+        <div style={{ marginTop: 8, animation: `fadeUp 350ms ${T.easeOut} both` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "0 2px" }}>
+            <div style={{ width: 3, height: 16, borderRadius: 99, background: T.inkMuted }} />
+            <span style={{ fontSize: 11, fontWeight: 700, color: T.inkMid, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              Vue semaine — S{getNumeroSemaine()}
+            </span>
+          </div>
+          <Card>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                  <th style={{ textAlign: "left", padding: "10px 16px", fontSize: 10, color: T.inkMuted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Technicien</th>
+                  {JOURS.slice(0, 5).map(j => (
+                    <th key={j} style={{ textAlign: "center", padding: "10px 12px", fontSize: 10, color: T.inkMuted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>{j.slice(0, 3)}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {techniciens.map((tech, i) => {
+                  const mission = MISSIONS[tech.mission];
+                  const champKeys = CHAMPS_PAR_MISSION[tech.mission] || [];
+                  const champPrincipal = champKeys.map(k => mission?.champs.find(c => c.key === k)).find(Boolean);
+                  const semTech = saisiesSemaine[tech.uid] || {};
+                  const jourActuel = getJourActuel();
+
+                  return (
+                    <tr key={tech.uid} className="table-row" style={{ borderBottom: i < techniciens.length - 1 ? `1px solid ${T.border}` : "none" }}>
+                      <td style={{ padding: "10px 16px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                          <Avatar prenom={tech.prenom} nom={tech.nom} couleur={mission?.couleur || T.inkSub} size={28} />
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: T.ink, lineHeight: 1.2 }}>{tech.prenom} {tech.nom}</div>
+                            {mission && <Badge couleur={mission.couleur} label={mission.label} small />}
+                          </div>
+                        </div>
+                      </td>
+                      {JOURS.slice(0, 5).map((jour, idx) => {
+                        const date = getDateDuJour(idx);
+                        const saisie = semTech[date];
+                        const estFutur = idx > jourActuel;
+                        const valeur = saisie && champPrincipal ? (saisie[champPrincipal.key] ?? 0) : null;
+                        return (
+                          <td key={jour} style={{ padding: "10px 12px", textAlign: "center", opacity: estFutur ? 0.3 : 1 }}>
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                              <Voyant saisi={!!saisie} size={7} />
+                              {saisie && valeur !== null ? (
+                                <span style={{ fontSize: 13, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace" }}>
+                                  {valeur}
+                                </span>
+                              ) : !estFutur && !saisie ? (
+                                <span style={{ fontSize: 11, color: T.border }}>—</span>
+                              ) : null}
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      )}
     </div>
   );
 };
@@ -1274,7 +1415,7 @@ const VueGestion = ({ user }) => {
                           {FOURNISSEURS.map(f => <option key={f} value={f}>{f}</option>)}
                         </select>
                       </td>
-                      <td style={{ padding: "10px 16px", textAlign: "center", fontSize: 12, color: T.inkMuted, fontFamily: "'IBM Plex Mono', monospace" }}>{tech.email}</td>
+                      <td style={{ padding: "10px 16px", textAlign: "center", fontSize: 12, color: T.inkMuted, fontFamily: "'Fira Code', monospace" }}>{tech.email}</td>
                       <td style={{ padding: "10px 16px" }}>
                         <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                           <Btn loading={savingEdit} style={{ fontSize: 11, padding: "4px 12px" }} onClick={async () => {
@@ -1306,7 +1447,7 @@ const VueGestion = ({ user }) => {
                       {mission && <Badge couleur={mission.couleur} label={mission.label} small />}
                     </td>
                     <td style={{ padding: "13px 16px", textAlign: "center", fontSize: 13, color: T.inkSub }}>{tech.fournisseur}</td>
-                    <td style={{ padding: "13px 16px", textAlign: "center", fontSize: 12, color: T.inkMuted, fontFamily: "'IBM Plex Mono', monospace" }}>{tech.email}</td>
+                    <td style={{ padding: "13px 16px", textAlign: "center", fontSize: 12, color: T.inkMuted, fontFamily: "'Fira Code', monospace" }}>{tech.email}</td>
                     <td style={{ padding: "13px 16px", textAlign: "center", whiteSpace: "nowrap" }}>
                       {confirmSuppr === tech.uid ? (
                         <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
@@ -1368,7 +1509,7 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
             </div>
           </div>
           <div style={{ marginLeft: "auto", textAlign: "center", padding: "12px 20px", background: T.bg, borderRadius: 10 }}>
-            <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace", color: mission?.couleur }}>
+            <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "'Fira Code', monospace", color: mission?.couleur }}>
               {[0,1,2,3,4].filter(idx => saisiesSem[getDateDuJour(idx)]).length}
               <span style={{ fontSize: 14, color: T.inkMuted, fontWeight: 400 }}>/5</span>
             </div>
@@ -1393,7 +1534,7 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
                   <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}><Voyant saisi={!!saisie} /></div>
                   {saisie && champPrincipal ? (
                     <>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: T.ink, fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1, marginBottom: 3 }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: T.ink, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 3 }}>
                         {saisie[champPrincipal.key] || 0}
                       </div>
                       <div style={{ fontSize: 9, color: T.inkMuted }}>{champPrincipal.label}</div>
@@ -1427,7 +1568,7 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
                       borderRight: (i + 1) % 4 !== 0 ? `1px solid ${T.border}` : "none",
                       borderBottom: i < champsNum.length - 4 ? `1px solid ${T.border}` : "none",
                     }}>
-                      <div style={{ fontSize: 26, fontWeight: 700, color: mission?.couleur, fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1, marginBottom: 5 }}>
+                      <div style={{ fontSize: 26, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 5 }}>
                         {saisieJour[champ.key] ?? 0}
                       </div>
                       <div style={{ fontSize: 10, color: T.inkSub, fontWeight: 500, lineHeight: 1.3 }}>{champ.label}</div>
@@ -1450,35 +1591,177 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
 };
 
 // ─── VUE HISTORIQUE ───────────────────────────────────────────────────────────
-const VueHistorique = () => {
-  const semActuelle = getNumeroSemaine();
-  const [sem, setSem] = useState(semActuelle);
-  const semaines = [semActuelle, semActuelle - 1, semActuelle - 2, semActuelle - 3];
+const VueHistorique = ({ user }) => {
+  const [semOffset, setSemOffset] = useState(0);
+  const [techniciens, setTechniciens] = useState([]);
+  const [saisiesParTech, setSaisiesParTech] = useState({});
+  const [loading, setLoading] = useState(true);
+
+  const semaine = getSemaineParOffset(semOffset);
+  const offsets = [0, -1, -2, -3];
+
+  useEffect(() => {
+    setLoading(true);
+    chargerHistoriqueSemaine(user.uid, semaine.key).then(({ techs, saisiesParTech: sp }) => {
+      setTechniciens(techs);
+      setSaisiesParTech(sp);
+      setLoading(false);
+    });
+  }, [semaine.key]);
+
+  // Calcule les totaux hebdomadaires d'un technicien
+  function calcTotaux(uid) {
+    const saisies = saisiesParTech[uid] || [];
+    const total = { nb_jours: saisies.length };
+    saisies.forEach(s => {
+      Object.keys(s).forEach(k => {
+        if (typeof s[k] === "number" && k !== "semaine") total[k] = (total[k] || 0) + s[k];
+      });
+    });
+    return total;
+  }
+
+  const parMission = techniciens.reduce((acc, t) => {
+    if (!acc[t.mission]) acc[t.mission] = [];
+    acc[t.mission].push(t);
+    return acc;
+  }, {});
 
   return (
-    <div style={{ padding: "28px 24px", maxWidth: 900, margin: "0 auto" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, animation: `fadeUp 250ms ${T.easeOut} both` }}>
-        <h1 style={{ fontSize: 20, fontWeight: 700, color: T.ink, letterSpacing: "-0.02em" }}>Historique</h1>
+    <div style={{ padding: "28px 24px", maxWidth: 960, margin: "0 auto" }}>
+      {/* En-tête */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, animation: `fadeUp 250ms ${T.easeOut} both` }}>
+        <div>
+          <h1 style={{ fontSize: 20, fontWeight: 700, color: T.ink, letterSpacing: "-0.02em", marginBottom: 4 }}>Historique</h1>
+          <p style={{ fontSize: 13, color: T.inkSub }}>
+            Semaine S{semaine.num} · {semaine.year} · {techniciens.length} technicien{techniciens.length > 1 ? "s" : ""}
+          </p>
+        </div>
         <div style={{ display: "flex", gap: 4, background: T.bg, borderRadius: 10, padding: 4 }}>
-          {semaines.map(s => (
-            <button key={s} onClick={() => setSem(s)} style={{
-              background: sem === s ? T.surface : "transparent",
-              color: sem === s ? T.ink : T.inkSub,
-              border: "none", borderRadius: 7, padding: "5px 14px",
-              fontSize: 13, fontWeight: sem === s ? 600 : 500, cursor: "pointer",
-              boxShadow: sem === s ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-              transition: `all 180ms ${T.easeOut}`,
-            }}>S{s}</button>
-          ))}
+          {offsets.map(o => {
+            const s = getSemaineParOffset(o);
+            return (
+              <button key={o} onClick={() => setSemOffset(o)} style={{
+                background: semOffset === o ? T.surface : "transparent",
+                color: semOffset === o ? T.ink : T.inkSub,
+                border: "none", borderRadius: 7, padding: "5px 14px",
+                fontSize: 13, fontWeight: semOffset === o ? 600 : 500,
+                cursor: "pointer",
+                boxShadow: semOffset === o ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                transition: `all 180ms ${T.easeOut}`,
+              }}>
+                {o === 0 ? "Cette sem." : `S${s.num}`}
+              </button>
+            );
+          })}
         </div>
       </div>
-      <Card animate>
-        <div style={{ padding: "48px 24px", textAlign: "center", color: T.inkMuted }}>
-          <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
-          <p style={{ fontSize: 14, marginBottom: 6 }}>Données semaine S{sem}</p>
-          <p style={{ fontSize: 13 }}>Disponibles une fois les saisies réelles en place.</p>
-        </div>
-      </Card>
+
+      {loading ? <Spinner /> : (
+        techniciens.length === 0 ? (
+          <Card animate>
+            <div style={{ padding: "48px 24px", textAlign: "center", color: T.inkMuted, fontSize: 14 }}>
+              Aucun technicien dans votre équipe.
+            </div>
+          </Card>
+        ) : (
+          Object.entries(parMission).map(([missionKey, techs]) => {
+            const mission = MISSIONS[missionKey];
+            const champKeys = CHAMPS_PAR_MISSION[missionKey] || mission?.champs.filter(c => c.type === "number").slice(0, 4).map(c => c.key) || [];
+            const champs4 = champKeys.map(k => mission?.champs.find(c => c.key === k)).filter(Boolean);
+            const totalMission = techs.reduce((acc, t) => acc + (calcTotaux(t.uid)[champs4[0]?.key] || 0), 0);
+
+            return (
+              <div key={missionKey} style={{ marginBottom: 24, animation: `fadeUp 300ms ${T.easeOut} both` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "0 2px" }}>
+                  <div style={{ width: 3, height: 16, borderRadius: 99, background: mission?.couleur }} />
+                  <span style={{ fontSize: 11, fontWeight: 700, color: T.inkMid, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                    {mission?.label}
+                  </span>
+                  <span style={{ fontSize: 11, color: T.inkMuted }}>— {techs.length} technicien{techs.length > 1 ? "s" : ""}</span>
+                  <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 11, color: T.inkSub }}>Total semaine :</span>
+                    <span style={{ fontFamily: "'Fira Code', monospace", fontSize: 14, fontWeight: 700, color: mission?.couleur, background: (mission?.couleur || T.blue) + "12", padding: "2px 10px", borderRadius: 6 }}>
+                      {totalMission}
+                    </span>
+                  </div>
+                </div>
+
+                <Card>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                        {["Technicien", "Jours", ...champs4.map(c => c.label), "Heures", "Statut"].map(h => (
+                          <th key={h} style={{
+                            textAlign: h === "Technicien" ? "left" : "center",
+                            padding: "10px 16px",
+                            fontSize: 10, color: T.inkMuted, fontWeight: 700,
+                            textTransform: "uppercase", letterSpacing: "0.08em",
+                          }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {techs.map((tech, i) => {
+                        const totaux = calcTotaux(tech.uid);
+                        const nbJours = totaux.nb_jours || 0;
+                        const complet = nbJours >= 5;
+                        const partiel = nbJours >= 3 && nbJours < 5;
+                        const statutCouleur = complet ? T.green : partiel ? T.amber : T.red;
+                        const statutTexte = complet ? "Complet" : nbJours > 0 ? `${nbJours}/5 jours` : "Aucune saisie";
+
+                        return (
+                          <tr key={tech.uid} className="table-row" style={{
+                            borderBottom: i < techs.length - 1 ? `1px solid ${T.border}` : "none",
+                            background: nbJours === 0 ? "#FFFBFB" : T.surface,
+                          }}>
+                            <td style={{ padding: "13px 16px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                <Avatar prenom={tech.prenom} nom={tech.nom} couleur={mission?.couleur || T.inkSub} size={32} />
+                                <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{tech.prenom} {tech.nom}</span>
+                              </div>
+                            </td>
+                            <td style={{ padding: "13px 16px", textAlign: "center" }}>
+                              <span style={{ fontFamily: "'Fira Code', monospace", fontSize: 14, fontWeight: 700, color: statutCouleur }}>
+                                {nbJours}/5
+                              </span>
+                            </td>
+                            {champs4.map((champ, ci) => (
+                              <td key={champ.key} style={{ padding: "13px 16px", textAlign: "center" }}>
+                                <span style={{
+                                  fontSize: ci === 0 ? 16 : 14,
+                                  fontWeight: ci === 0 ? 700 : 600,
+                                  color: nbJours > 0 ? (ci === 0 ? mission?.couleur : T.inkMid) : T.border,
+                                  fontFamily: "'Fira Code', monospace",
+                                }}>
+                                  {nbJours > 0 ? (totaux[champ.key] ?? 0) : "—"}
+                                </span>
+                              </td>
+                            ))}
+                            <td style={{ padding: "13px 16px", textAlign: "center" }}>
+                              <span style={{ fontSize: 13, color: nbJours > 0 ? T.inkSub : T.border, fontFamily: "'Fira Code', monospace" }}>
+                                {nbJours > 0 ? `${totaux.total_heures || 0}h` : "—"}
+                              </span>
+                            </td>
+                            <td style={{ padding: "13px 16px" }}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+                                <Voyant saisi={complet} />
+                                <span style={{ fontSize: 12, fontWeight: 500, color: statutCouleur, whiteSpace: "nowrap" }}>
+                                  {statutTexte}
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </Card>
+              </div>
+            );
+          })
+        )
+      )}
     </div>
   );
 };
@@ -1518,6 +1801,7 @@ export default function App() {
           {page === "mon_suivi" && <VueMonSuivi user={user} />}
           {page === "dashboard" && <VueDashboard user={user} onVoirProfil={t => { setProfilTech(t); setPage("profil"); }} />}
           {page === "historique" && <VueHistorique user={user} />}
+
           {page === "gestion" && <VueGestion user={user} />}
           {page === "profil" && profilTech && <VueProfilTechnicien tech={profilTech} onRetour={() => { setProfilTech(null); setPage("dashboard"); }} />}
         </main>

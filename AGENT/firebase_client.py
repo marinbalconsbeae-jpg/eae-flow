@@ -79,3 +79,15 @@ def charger_saisies_semaine():
     semaine_key = f"{date.today().year}-S{date.today().isocalendar()[1]}"
     docs = db.collection("saisies").where(filter=FieldFilter("semaine", "==", semaine_key)).stream()
     return [doc.to_dict() for doc in docs]
+
+
+def charger_fournisseurs():
+    """Retourne les fournisseurs depuis la collection Firestore 'fournisseurs'."""
+    db = _get_db()
+    docs = db.collection("fournisseurs").stream()
+    fournisseurs = []
+    for doc in docs:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        fournisseurs.append(data)
+    return fournisseurs

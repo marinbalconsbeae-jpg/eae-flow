@@ -20,6 +20,7 @@ import resend
 from firebase_client import (
     charger_techniciens as fb_charger_techniciens,
     charger_charges_affaires as fb_charger_charges_affaires,
+    charger_fournisseurs as fb_charger_fournisseurs,
     charger_saisies_du_jour,
     charger_saisies_semaine,
 )
@@ -66,6 +67,9 @@ def charger_techniciens():
 
 def charger_charges_affaires():
     return fb_charger_charges_affaires()
+
+def charger_fournisseurs():
+    return fb_charger_fournisseurs()
 
 def charger_saisies():
     raise NotImplementedError("charger_saisies() supprimée — utiliser charger_saisies_du_jour() ou charger_saisies_semaine() depuis firebase_client.")
@@ -281,6 +285,48 @@ Sois direct et factuel. Mets en avant les performances notables et les manques (
         return ""
 
 
+# ─── ANALYSE CLAUDE HEBDO ────────────────────────────────────────────────────
+def generer_analyse_claude_semaine(ca, mes_techs, totaux, semaine):
+    """Génère une analyse narrative hebdomadaire via Claude API."""
+    try:
+        lignes = []
+        for tech in mes_techs:
+            total = totaux.get(tech["uid"], {})
+            nb_jours = total.get("nb_jours", 0)
+            mission = tech["mission"].replace("_", " ")
+            champs = CHAMPS_PAR_MISSION.get(tech["mission"], [])
+            stats = ", ".join(
+                f"{LABELS_CHAMPS.get(k, k)}: {total.get(k, 0)}"
+                for k in champs if total.get(k) is not None
+            )
+            lignes.append(
+                f"- {tech['prenom']} {tech['nom']} ({mission}, {nb_jours}/5 jours) : {stats or 'aucune saisie'}"
+            )
+
+        donnees = "\n".join(lignes)
+        prompt = f"""Tu es analyste pour SBEAE, entreprise de travaux sur compteurs d'eau.
+Rédige une analyse narrative courte (3 à 5 phrases) en français pour le chargé d'affaires {ca['prenom']} {ca['nom']}, basée sur les totaux de la semaine S{semaine}.
+
+Données des techniciens :
+{donnees}
+
+Sois direct et factuel. Note les bons performers, les absences fréquentes, les volumes inhabituels. Ne génère pas de HTML, juste du texte pur."""
+
+        client_claude = anthropic.Anthropic()
+        response = client_claude.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        texte = response.content[0].text.strip()
+        log.info(f"Analyse Claude semaine générée pour {ca['prenom']} {ca['nom']}")
+        return texte
+
+    except Exception as e:
+        log.error(f"Erreur analyse Claude semaine pour {ca.get('nom', '?')} : {e}")
+        return ""
+
+
 # ─── TÂCHE 2 : RÉCAP JOURNALIER AUX CHARGÉS D'AFFAIRES ──────────────────────
 def tache_recap_journalier():
     """Envoie le récap du jour à chaque chargé d'affaires."""
@@ -387,38 +433,199 @@ def _formater_stats_mission(saisie, mission):
         html += f'<br><em style="color:#666; font-size:12px;">💬 {commentaires}</em>'
     return html
 
-# ─── TÂCHE 3 : COMPILATION VENDREDI ──────────────────────────────────────────
-def tache_compilation_vendredi():
-    """Compile les totaux de la semaine, remplit l'Excel, envoie les mails."""
-    if not est_vendredi():
-        log.info("Pas vendredi — compilation ignorée.")
-        return
+# ─── UTILITAIRE FORMATAGE TOTAUX HEBDO ───────────────────────────────────────
+def _formater_totaux_mission(total, mission):
+    """Formate les totaux hebdomadaires d'un technicien selon sa mission."""
+    parts = []
+    champs = CHAMPS_PAR_MISSION.get(mission, [])
+    for key in champs:
+        val = total.get(key)
+        if val is not None:
+            parts.append(f"{LABELS_CHAMPS.get(key, key)} : <strong>{val}</strong>")
+    heures = total.get("total_heures")
+    if heures is not None and "total_heures" not in champs:
+        parts.append(f"Heures : <strong>{heures}h</strong>")
+    return " · ".join(parts) if parts else "—"
 
-    log.info("=== TÂCHE : Compilation vendredi ===")
+
+# ─── TÂCHE 3 : RÉCAP HEBDO CHARGÉS D'AFFAIRES ────────────────────────────────
+def tache_recap_hebdo_ca():
+    """Envoie à chaque CA un récap hebdo de ses techniciens groupé par mission, avec analyse Claude."""
+    log.info("=== TÂCHE : Récap hebdo chargés d'affaires ===")
 
     config = charger_config()
     techniciens = charger_techniciens()
     charges = charger_charges_affaires()
     saisies_sem = charger_saisies_semaine()
+    semaine = get_semaine_courante()
+    annee = get_annee_courante()
 
-    # Calculer les totaux par technicien (format agent.py)
     totaux = _calculer_totaux_semaine(techniciens, saisies_sem)
 
-    # Remplir l'Excel via Claude (remplir_excel.py)
-    fichier_excel = None
-    try:
-        from remplir_excel import remplir_excel
-        fichier_excel = remplir_excel()
-    except Exception as e:
-        log.error(f"Erreur remplissage Excel : {e}")
+    for ca in charges:
+        mes_techs = [t for t in techniciens if t.get("charge_id") == ca["id"]]
+        if not mes_techs:
+            continue
 
-    # Envoyer aux fournisseurs groupés par CA
-    _envoyer_mails_fournisseurs(config, techniciens, charges, totaux)
+        # Grouper par mission
+        missions_map = {}
+        for tech in mes_techs:
+            m = tech.get("mission", "Autre")
+            missions_map.setdefault(m, []).append(tech)
 
-    # Envoyer au patron avec l'Excel
-    _envoyer_mail_patron(config, totaux, techniciens, fichier_excel)
+        # Construire les blocs HTML par mission
+        blocs_html = ""
+        for mission, techs in sorted(missions_map.items()):
+            lignes_mission = ""
+            for tech in techs:
+                total = totaux.get(tech["uid"], {})
+                nb_jours = total.get("nb_jours", 0)
+                stats_html = _formater_totaux_mission(total, mission)
+                if nb_jours >= 4:
+                    badge_bg, badge_color = "#D1FAE5", "#065F46"
+                elif nb_jours == 0:
+                    badge_bg, badge_color = "#FEE2E2", "#991B1B"
+                else:
+                    badge_bg, badge_color = "#FEF3C7", "#92400E"
+                lignes_mission += f"""
+                <tr style="border-bottom:1px solid #F1F5F9; background:{'#FFF5F5' if nb_jours==0 else '#FFFFFF'};">
+                    <td style="padding:9px 16px; font-weight:600; color:#020617;">{tech['prenom']} {tech['nom']}</td>
+                    <td style="padding:9px 16px; text-align:center;">
+                        <span style="background:{badge_bg}; color:{badge_color}; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:700;">{nb_jours}/5</span>
+                    </td>
+                    <td style="padding:9px 16px; font-size:13px; color:#334155;">{stats_html}</td>
+                </tr>"""
 
-    log.info("=== Compilation vendredi terminée ===")
+            blocs_html += f"""
+            <tr>
+                <td colspan="3" style="padding:8px 16px 6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#0369A1; background:#F0F7FF; border-top:2px solid #BFDBFE;">
+                    {mission.replace('_', ' ')}
+                </td>
+            </tr>
+            {lignes_mission}"""
+
+        analyse = generer_analyse_claude_semaine(ca, mes_techs, totaux, semaine)
+        bloc_analyse = f"""
+        <div style="background:#F0F7FF; border-left:4px solid #0369A1; margin:16px 24px; padding:14px 16px; border-radius:0 6px 6px 0; font-size:14px; line-height:1.6; color:#1e3a5f;">
+            <strong style="display:block; margin-bottom:6px; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:#0369A1;">Analyse de la semaine · Claude</strong>
+            {analyse}
+        </div>""" if analyse else ""
+
+        nb_actifs = sum(1 for t in mes_techs if totaux.get(t["uid"], {}).get("nb_jours", 0) > 0)
+        total_heures_equipe = sum(totaux.get(t["uid"], {}).get("total_heures", 0) or 0 for t in mes_techs)
+
+        sujet = f"[EAE Flow] Récap semaine S{semaine}/{annee} — {nb_actifs}/{len(mes_techs)} actifs"
+        corps = f"""
+        <html><body style="font-family: Arial, sans-serif; color: #333; background: #F8FAFC;">
+        <div style="max-width: 720px; margin: 0 auto; padding: 20px;">
+            <div style="background: linear-gradient(180deg, #0F172A, #1E293B); color: white; padding: 20px 24px; border-radius: 8px 8px 0 0;">
+                <h2 style="margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -0.02em;">EAE Flow — Récap semaine S{semaine}</h2>
+                <p style="margin: 6px 0 0; color: #94A3B8; font-size: 13px;">
+                    {annee} · {nb_actifs}/{len(mes_techs)} techniciens actifs · {total_heures_equipe}h total équipe
+                </p>
+            </div>
+            <div style="background: #fff; border: 1px solid #E2E8F0; border-top: none; border-radius: 0 0 8px 8px; overflow: hidden;">
+                <p style="padding: 16px 24px 4px; margin: 0;">Bonjour <strong>{ca['prenom']} {ca['nom']}</strong>,</p>
+                <p style="padding: 4px 24px 12px; margin: 0; color: #64748B; font-size: 14px;">
+                    Voici le bilan de la semaine S{semaine} pour vos {len(mes_techs)} techniciens.
+                </p>
+                {bloc_analyse}
+                <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                    <thead>
+                        <tr style="background: #F8FAFC; border-bottom: 2px solid #E2E8F0;">
+                            <th style="padding: 10px 16px; text-align: left; font-size: 11px; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.05em;">Technicien</th>
+                            <th style="padding: 10px 16px; text-align: center; font-size: 11px; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.05em;">Jours</th>
+                            <th style="padding: 10px 16px; text-align: left; font-size: 11px; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.05em;">Totaux semaine</th>
+                        </tr>
+                    </thead>
+                    <tbody>{blocs_html}</tbody>
+                </table>
+                <p style="padding: 16px 24px; color: #94A3B8; font-size: 12px; border-top: 1px solid #F1F5F9; margin: 0;">
+                    Message automatique EAE Flow · chaque vendredi à 21h. Ne pas répondre.
+                </p>
+            </div>
+        </div>
+        </body></html>
+        """
+        envoyer_email(config, ca["email"], f"{ca['prenom']} {ca['nom']}", sujet, corps)
+
+    log.info("=== Récap hebdo CA terminé ===")
+
+
+# ─── TÂCHE 4 : RÉCAP HEBDO FOURNISSEURS ──────────────────────────────────────
+def tache_recap_hebdo_fournisseur():
+    """Envoie à chaque fournisseur un récap hebdo des techniciens associés."""
+    log.info("=== TÂCHE : Récap hebdo fournisseurs ===")
+
+    config = charger_config()
+    techniciens = charger_techniciens()
+    fournisseurs = charger_fournisseurs()
+    saisies_sem = charger_saisies_semaine()
+    semaine = get_semaine_courante()
+    annee = get_annee_courante()
+
+    totaux = _calculer_totaux_semaine(techniciens, saisies_sem)
+
+    for four in fournisseurs:
+        nom_four = four.get("nom", "")
+        ses_techs = [t for t in techniciens if t.get("fournisseur") == nom_four]
+        if not ses_techs:
+            log.info(f"Aucun technicien pour le fournisseur '{nom_four}' — mail ignoré")
+            continue
+
+        lignes_html = ""
+        for tech in ses_techs:
+            total = totaux.get(tech["uid"], {})
+            nb_jours = total.get("nb_jours", 0)
+            mission = tech.get("mission", "").replace("_", " ")
+            stats = _formater_totaux_mission(total, tech.get("mission", ""))
+            lignes_html += f"""
+            <tr style="border-bottom: 1px solid #F1F5F9;">
+                <td style="padding: 10px 16px; font-weight: 600; color: #020617;">{tech['prenom']} {tech['nom']}</td>
+                <td style="padding: 10px 16px; color: #64748B; font-size: 13px;">{mission}</td>
+                <td style="padding: 10px 16px; text-align: center; font-size: 13px; font-weight: 700;">{nb_jours}/5</td>
+                <td style="padding: 10px 16px; font-size: 13px; color: #334155;">{stats}</td>
+            </tr>"""
+
+        nb_actifs = sum(1 for t in ses_techs if totaux.get(t["uid"], {}).get("nb_jours", 0) > 0)
+        contact = four.get("contact", four["nom"])
+
+        sujet = f"Bilan semaine S{semaine}/{annee} — Techniciens SBEAE"
+        corps = f"""
+        <html><body style="font-family: Arial, sans-serif; color: #333; background: #F8FAFC;">
+        <div style="max-width: 700px; margin: 0 auto; padding: 20px;">
+            <div style="background: #0F172A; color: white; padding: 18px 24px; border-radius: 8px 8px 0 0;">
+                <h2 style="margin: 0; font-size: 18px; font-weight: 700;">Bilan semaine S{semaine} — SBEAE</h2>
+                <p style="margin: 5px 0 0; color: #94A3B8; font-size: 13px;">
+                    {annee} · {nb_actifs}/{len(ses_techs)} techniciens actifs cette semaine
+                </p>
+            </div>
+            <div style="background: #fff; border: 1px solid #E2E8F0; border-top: none; border-radius: 0 0 8px 8px; overflow: hidden;">
+                <p style="padding: 16px 24px 8px; margin: 0;">Bonjour <strong>{contact}</strong>,</p>
+                <p style="padding: 0 24px 16px; margin: 0; color: #64748B; font-size: 14px;">
+                    Voici les statistiques de la semaine S{semaine} pour les techniciens SBEAE affectés à {nom_four}.
+                </p>
+                <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                    <thead>
+                        <tr style="background: #F8FAFC; border-bottom: 2px solid #E2E8F0;">
+                            <th style="padding: 10px 16px; text-align: left; font-size: 11px; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.05em;">Technicien</th>
+                            <th style="padding: 10px 16px; text-align: left; font-size: 11px; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.05em;">Mission</th>
+                            <th style="padding: 10px 16px; text-align: center; font-size: 11px; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.05em;">Jours</th>
+                            <th style="padding: 10px 16px; text-align: left; font-size: 11px; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.05em;">Totaux</th>
+                        </tr>
+                    </thead>
+                    <tbody>{lignes_html}</tbody>
+                </table>
+                <p style="padding: 16px 24px; color: #94A3B8; font-size: 12px; border-top: 1px solid #F1F5F9; margin: 0;">
+                    Ce bilan est transmis automatiquement chaque vendredi soir par SBEAE.
+                </p>
+            </div>
+        </div>
+        </body></html>
+        """
+        envoyer_email(config, four["email"], contact, sujet, corps)
+
+    log.info("=== Récap hebdo fournisseurs terminé ===")
 
 def _calculer_totaux_semaine(techniciens, saisies_sem):
     """Calcule les totaux hebdomadaires pour chaque technicien."""
@@ -441,213 +648,6 @@ def _calculer_totaux_semaine(techniciens, saisies_sem):
 
     return totaux
 
-def _remplir_excel(config, techniciens, totaux):
-    """Remplit le fichier Excel EAE avec les totaux de la semaine."""
-    try:
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
-
-        fichier_source = BASE_DIR / config["fichiers"]["excel_suivi"]
-        if not fichier_source.exists():
-            log.warning(f"Fichier Excel source introuvable : {fichier_source}")
-            return None
-
-        wb = openpyxl.load_workbook(fichier_source)
-        semaine = get_semaine_courante()
-        annee = get_annee_courante()
-
-        # Chercher l'onglet de la semaine courante
-        nom_onglet = f"Sem_{semaine}"
-        if nom_onglet not in wb.sheetnames:
-            # Essayer de trouver un onglet similaire ou créer
-            log.info(f"Onglet {nom_onglet} non trouvé, recherche d'un onglet existant...")
-            # Trouver le dernier onglet Sem_X et en créer un nouveau
-            onglets_sem = [s for s in wb.sheetnames if s.startswith("Sem_")]
-            if onglets_sem:
-                dernier = wb[onglets_sem[-1]]
-                ws = wb.copy_worksheet(dernier)
-                ws.title = nom_onglet
-            else:
-                ws = wb.create_sheet(nom_onglet)
-        else:
-            ws = wb[nom_onglet]
-
-        # Trouver les lignes techniciens et remplir les totaux
-        for tech in techniciens:
-            total = totaux.get(tech["uid"], {})
-            _remplir_ligne_technicien(ws, tech, total)
-
-        # Sauvegarder
-        dossier_sortie = BASE_DIR / config["fichiers"]["dossier_sortie"]
-        dossier_sortie.mkdir(exist_ok=True)
-        fichier_sortie = dossier_sortie / f"SUIVI_S{semaine}_{annee}.xlsx"
-        wb.save(fichier_sortie)
-        log.info(f"Excel sauvegardé : {fichier_sortie}")
-        return fichier_sortie
-
-    except ImportError:
-        log.error("openpyxl non installé. Lancer : pip install openpyxl")
-        return None
-    except Exception as e:
-        log.error(f"Erreur remplissage Excel : {e}")
-        return None
-
-def _remplir_ligne_technicien(ws, tech, total):
-    """Trouve la ligne du technicien dans la feuille et remplit ses totaux."""
-    nom_complet = f"{tech['nom']} {tech['prenom']}"
-    nom_inverse = f"{tech['prenom']} {tech['nom']}"
-
-    for row in ws.iter_rows():
-        for cell in row:
-            val = str(cell.value or "").strip().upper()
-            if tech["nom"].upper() in val and (tech["prenom"].upper() in val or tech["prenom"][0].upper() in val):
-                # Trouvé la ligne — remplir les colonnes adjacentes
-                row_num = cell.row
-                col_num = cell.column
-
-                # Remplir les totaux selon la mission
-                if tech["mission"] == "RT_Compteur_Module":
-                    _remplir_rt_compteur(ws, row_num, col_num, total)
-                elif tech["mission"] == "Releve_CPT":
-                    _remplir_releve_cpt(ws, row_num, col_num, total)
-                elif tech["mission"] == "Controle_AC":
-                    _remplir_controle_ac(ws, row_num, col_num, total)
-
-                log.info(f"Technicien {tech['nom']} trouvé à la ligne {row_num}")
-                return
-
-    log.warning(f"Technicien {tech['nom']} non trouvé dans le fichier Excel")
-
-def _remplir_rt_compteur(ws, row, col_debut, total):
-    """Remplit les colonnes RT Compteur pour une ligne technicien."""
-    # Mapping colonnes — à ajuster selon la structure réelle du fichier
-    mapping = {
-        1: total.get("cpt_dn15_20", 0),
-        2: total.get("cpt_dn_sup20", 0),
-        3: total.get("modules_poses", 0),
-        4: total.get("modules_relances", 0),
-        5: total.get("rac", 0),
-        6: total.get("clapets_fact", 0),
-        7: total.get("mo_heures", 0),
-        8: total.get("total_heures", 0),
-    }
-    for offset, valeur in mapping.items():
-        ws.cell(row=row, column=col_debut + offset, value=valeur)
-
-def _remplir_releve_cpt(ws, row, col_debut, total):
-    """Remplit les colonnes Relevé CPT."""
-    mapping = {
-        1: total.get("cpt_releves", 0),
-        2: total.get("infructueux", 0),
-        3: total.get("absents_pda", 0),
-        4: total.get("total_heures", 0),
-    }
-    for offset, valeur in mapping.items():
-        ws.cell(row=row, column=col_debut + offset, value=valeur)
-
-def _remplir_controle_ac(ws, row, col_debut, total):
-    """Remplit les colonnes Contrôle AC."""
-    mapping = {
-        1: total.get("ctrl_vente_inf10", 0),
-        2: total.get("ctrl_vente_sup10", 0),
-        3: total.get("ctrl_contrat_inf10", 0),
-        4: total.get("ctrl_contrat_sup10", 0),
-        5: total.get("total_heures", 0),
-    }
-    for offset, valeur in mapping.items():
-        ws.cell(row=row, column=col_debut + offset, value=valeur)
-
-def _envoyer_mails_fournisseurs(config, techniciens, charges, totaux):
-    """Envoie les récaps hebdo aux chargés d'affaires."""
-    semaine = get_semaine_courante()
-
-    for ca in charges:
-        mes_techs = [t for t in techniciens if t["charge_id"] == ca["id"]]
-        if not mes_techs:
-            continue
-
-        lignes_html = ""
-        for tech in mes_techs:
-            total = totaux.get(tech["uid"], {})
-            nb_jours = total.get("nb_jours", 0)
-
-            lignes_html += f"""
-            <tr style="border-bottom: 1px solid #f0f0f0;">
-                <td style="padding: 10px 16px; font-weight: 600;">{tech['prenom']} {tech['nom']}</td>
-                <td style="padding: 10px 16px; color: #666; font-size: 13px;">{tech['mission'].replace('_', ' ')}</td>
-                <td style="padding: 10px 16px; text-align: center; font-size: 13px;">{nb_jours}/5</td>
-                <td style="padding: 10px 16px; text-align: center; font-weight: 700; color: #1A56DB;">
-                    {total.get('cpt_dn15_20', 0) or total.get('cpt_releves', 0) or total.get('ctrl_vente_inf10', 0)}
-                </td>
-                <td style="padding: 10px 16px; text-align: center;">{total.get('modules_poses', 0) or '—'}</td>
-                <td style="padding: 10px 16px; text-align: center;">{total.get('total_heures', 0)}h</td>
-            </tr>
-            """
-
-        sujet = f"[EAE Flow] Bilan semaine S{semaine} — {len(mes_techs)} techniciens"
-        corps = f"""
-        <html><body style="font-family: Arial, sans-serif; color: #333;">
-        <div style="max-width: 700px; margin: 0 auto; padding: 20px;">
-            <div style="background: #0F172A; color: white; padding: 16px 24px; border-radius: 8px 8px 0 0;">
-                <h2 style="margin: 0; font-size: 18px;">EAE Flow — Bilan semaine S{semaine}</h2>
-                <p style="margin: 4px 0 0; color: #94A3B8; font-size: 13px;">
-                    Totaux hebdomadaires · {len(mes_techs)} techniciens
-                </p>
-            </div>
-            <div style="background: #fff; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 8px 8px; overflow: hidden;">
-                <p style="padding: 16px 24px 0; margin: 0;">Bonjour <strong>{ca['prenom']} {ca['nom']}</strong>,</p>
-                <p style="padding: 8px 24px 16px; margin: 0; color: #666;">
-                    Voici les totaux de la semaine S{semaine} pour vos techniciens.
-                </p>
-                <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-                    <thead>
-                        <tr style="background: #F8FAFC; border-bottom: 2px solid #e0e0e0;">
-                            <th style="padding: 10px 16px; text-align: left; font-size: 11px; color: #999; text-transform: uppercase;">Technicien</th>
-                            <th style="padding: 10px 16px; text-align: left; font-size: 11px; color: #999; text-transform: uppercase;">Mission</th>
-                            <th style="padding: 10px 16px; text-align: center; font-size: 11px; color: #999; text-transform: uppercase;">Jours</th>
-                            <th style="padding: 10px 16px; text-align: center; font-size: 11px; color: #999; text-transform: uppercase;">CPT / Unités</th>
-                            <th style="padding: 10px 16px; text-align: center; font-size: 11px; color: #999; text-transform: uppercase;">Modules</th>
-                            <th style="padding: 10px 16px; text-align: center; font-size: 11px; color: #999; text-transform: uppercase;">Heures</th>
-                        </tr>
-                    </thead>
-                    <tbody>{lignes_html}</tbody>
-                </table>
-                <p style="padding: 16px 24px; color: #999; font-size: 12px; border-top: 1px solid #f0f0f0;">
-                    Message automatique envoyé chaque vendredi soir. Le fichier Excel complet est transmis au responsable.
-                </p>
-            </div>
-        </div>
-        </body></html>
-        """
-        envoyer_email(config, ca["email"], f"{ca['prenom']} {ca['nom']}", sujet, corps)
-
-def _envoyer_mail_patron(config, totaux, techniciens, fichier_excel):
-    """Envoie l'Excel compilé au patron."""
-    semaine = get_semaine_courante()
-    patron = config["patron"]
-
-    sujet = f"[EAE Flow] Suivi hebdomadaire S{semaine} — Excel joint"
-    corps = f"""
-    <html><body style="font-family: Arial, sans-serif; color: #333;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="background: #0F172A; color: white; padding: 16px 24px; border-radius: 8px 8px 0 0;">
-            <h2 style="margin: 0; font-size: 18px;">EAE Flow — Suivi S{semaine}</h2>
-        </div>
-        <div style="background: #fff; border: 1px solid #e0e0e0; border-top: none; padding: 24px; border-radius: 0 0 8px 8px;">
-            <p>Bonjour <strong>{patron['nom']}</strong>,</p>
-            <p>Veuillez trouver ci-joint le fichier Excel de suivi hebdomadaire pour la semaine S{semaine}.</p>
-            <p>
-                <strong>{len(techniciens)}</strong> techniciens · 
-                <strong>{sum(1 for t in techniciens if totaux.get(t['id'], {}).get('nb_jours', 0) > 0)}</strong> ont saisi au moins une journée
-            </p>
-            <p style="color: #999; font-size: 12px; margin-top: 24px;">Message automatique EAE Flow.</p>
-        </div>
-    </div>
-    </body></html>
-    """
-
-    pieces_jointes = [str(fichier_excel)] if fichier_excel else None
-    envoyer_email(config, patron["email"], patron["nom"], sujet, corps, pieces_jointes)
 
 # ─── PLANIFICATEUR ────────────────────────────────────────────────────────────
 def demarrer_agent():
@@ -655,11 +655,14 @@ def demarrer_agent():
     config = charger_config()
     horaires = config["horaires"]
 
+    horaire_hebdo = horaires.get("recap_hebdo", "21:00")
+
     log.info("=" * 50)
     log.info("EAE Flow Agent démarré")
     log.info(f"Rappels techniciens    : {horaires['rappel_saisie']}")
     log.info(f"Récap chargés d'aff.  : {horaires['recap_journalier']}")
-    log.info(f"Compilation vendredi   : {horaires['compilation_vendredi']}")
+    log.info(f"Récap hebdo CA         : vendredi {horaire_hebdo}")
+    log.info(f"Récap hebdo fournisseurs : vendredi {horaire_hebdo}")
     log.info("=" * 50)
 
     # Traiter les suppressions de comptes en attente
@@ -668,7 +671,8 @@ def demarrer_agent():
     # Planifier les tâches
     schedule.every().day.at(horaires["rappel_saisie"]).do(tache_rappel_techniciens)
     schedule.every().day.at(horaires["recap_journalier"]).do(tache_recap_journalier)
-    schedule.every().friday.at(horaires["compilation_vendredi"]).do(tache_compilation_vendredi)
+    schedule.every().friday.at(horaire_hebdo).do(tache_recap_hebdo_ca)
+    schedule.every().friday.at(horaire_hebdo).do(tache_recap_hebdo_fournisseur)
 
     # Boucle principale
     while True:
@@ -686,7 +690,8 @@ def tester_agent(redirect_email=None):
         log.info("=== MODE TEST — Exécution immédiate de toutes les tâches ===")
     tache_rappel_techniciens()
     tache_recap_journalier()
-    tache_compilation_vendredi()
+    tache_recap_hebdo_ca()
+    tache_recap_hebdo_fournisseur()
     log.info("=== TEST TERMINÉ ===")
 
 # ─── POINT D'ENTRÉE ──────────────────────────────────────────────────────────
