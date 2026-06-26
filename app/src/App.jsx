@@ -428,6 +428,21 @@ async function modifierTechnicien(uid, { mission, fournisseur }) {
 
 const FOURNISSEURS = ["Iléo", "CUA", "Véolia", "Suez", "SEPIG", "Autre"];
 
+async function chargerFournisseurs() {
+  const snap = await getDocs(collection(db, "fournisseurs"));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+async function creerFournisseur(nom, email) {
+  const id = nom.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+  await setDoc(doc(db, "fournisseurs", id), { nom, email });
+}
+async function modifierFournisseur(id, email) {
+  await updateDoc(doc(db, "fournisseurs", id), { email });
+}
+async function supprimerFournisseur(id) {
+  await deleteDoc(doc(db, "fournisseurs", id));
+}
+
 // ─── COMPOSANTS PRIMITIFS ─────────────────────────────────────────────────────
 
 // Voyant avec animation pulse pour non-saisi
@@ -740,7 +755,7 @@ const Header = ({ user, onLogout, page, onChangePage }) => {
 
   const navItems = isTech
     ? [{ id: "saisie", label: "Saisie du jour" }, { id: "mon_suivi", label: "Mon suivi" }]
-    : [{ id: "dashboard", label: "Dashboard" }, { id: "historique", label: "Historique" }, { id: "gestion", label: "Mes techniciens" }];
+    : [{ id: "dashboard", label: "Dashboard" }, { id: "historique", label: "Historique" }, { id: "gestion", label: "Mes techniciens" }, { id: "fournisseurs", label: "Fournisseurs" }];
 
   return (
     <header style={{
@@ -1296,6 +1311,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
 // ─── VUE GESTION TECHNICIENS ──────────────────────────────────────────────────
 const VueGestion = ({ user }) => {
   const [techniciens, setTechniciens] = useState([]);
+  const [fournisseursList, setFournisseursList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ nom: "", prenom: "", email: "", mission: "RT_Compteur_Module", fournisseur: "" });
@@ -1308,7 +1324,10 @@ const VueGestion = ({ user }) => {
   const [savingEdit, setSavingEdit] = useState(false);
 
   const recharger = () => chargerMesTechniciens(user.uid).then(t => { setTechniciens(t); setLoading(false); });
-  useEffect(() => { recharger(); }, []);
+  useEffect(() => {
+    recharger();
+    chargerFournisseurs().then(f => setFournisseursList(f.map(x => x.nom)));
+  }, []);
 
   const handleCreer = async (e) => {
     e.preventDefault(); setSaving(true); setErreur("");
@@ -1412,7 +1431,7 @@ const VueGestion = ({ user }) => {
                         <select className="field-input" value={editForm.fournisseur}
                           onChange={e => setEditForm(p => ({ ...p, fournisseur: e.target.value }))}
                           style={{ fontSize: 12, padding: "6px 10px" }}>
-                          {FOURNISSEURS.map(f => <option key={f} value={f}>{f}</option>)}
+                          {(fournisseursList.length ? fournisseursList : FOURNISSEURS).map(f => <option key={f} value={f}>{f}</option>)}
                         </select>
                       </td>
                       <td style={{ padding: "10px 16px", textAlign: "center", fontSize: 12, color: T.inkMuted, fontFamily: "'Fira Code', monospace" }}>{tech.email}</td>
@@ -1766,6 +1785,178 @@ const VueHistorique = ({ user }) => {
   );
 };
 
+// ─── VUE FOURNISSEURS ────────────────────────────────────────────────────────
+const VueFournisseurs = ({ user }) => {
+  const [fournisseurs, setFournisseurs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ nom: "", email: "" });
+  const [saving, setSaving] = useState(false);
+  const [succes, setSucces] = useState("");
+  const [erreur, setErreur] = useState("");
+  const [editId, setEditId] = useState(null);
+  const [editEmail, setEditEmail] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [confirmSuppr, setConfirmSuppr] = useState(null);
+
+  const recharger = () => chargerFournisseurs().then(f => { setFournisseurs(f); setLoading(false); });
+  useEffect(() => { recharger(); }, []);
+
+  const handleCreer = async (e) => {
+    e.preventDefault();
+    setSaving(true); setErreur("");
+    try {
+      await creerFournisseur(form.nom, form.email);
+      setSucces(`Fournisseur "${form.nom}" ajouté.`);
+      setShowForm(false);
+      setForm({ nom: "", email: "" });
+      recharger();
+    } catch { setErreur("Erreur lors de la création. Ce nom existe peut-être déjà."); }
+    finally { setSaving(false); }
+  };
+
+  if (loading) return <Spinner />;
+
+  return (
+    <div style={{ padding: "28px 24px", maxWidth: 720, margin: "0 auto" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, animation: `fadeUp 250ms ${T.easeOut} both` }}>
+        <div>
+          <h1 style={{ fontSize: 20, fontWeight: 700, color: T.ink, letterSpacing: "-0.02em", marginBottom: 4 }}>Fournisseurs</h1>
+          <p style={{ fontSize: 13, color: T.inkSub }}>
+            {fournisseurs.length} fournisseur{fournisseurs.length !== 1 ? "s" : ""} · récap hebdo envoyé chaque vendredi à 21h
+          </p>
+        </div>
+        <Btn onClick={() => { setShowForm(v => !v); setSucces(""); setErreur(""); }}>
+          {showForm ? "Annuler" : "+ Ajouter"}
+        </Btn>
+      </div>
+
+      {succes && <Alert type="success" style={{ marginBottom: 20 }}>{succes}</Alert>}
+      {erreur && <Alert type="error" style={{ marginBottom: 20 }}>{erreur}</Alert>}
+
+      {showForm && (
+        <Card animate style={{ marginBottom: 20, padding: 24 }}>
+          <SectionLabel>Nouveau fournisseur</SectionLabel>
+          <form onSubmit={handleCreer}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+              <Field label="Nom du fournisseur">
+                <input className="field-input" value={form.nom} onChange={e => setForm(p => ({ ...p, nom: e.target.value }))} required placeholder="Iléo, CUA, Véolia…" />
+              </Field>
+              <Field label="Email de réception récap">
+                <input className="field-input" type="email" value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} required placeholder="contact@fournisseur.fr" />
+              </Field>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <Btn variant="secondary" onClick={() => setShowForm(false)}>Annuler</Btn>
+              <Btn type="submit" loading={saving}>Ajouter</Btn>
+            </div>
+          </form>
+        </Card>
+      )}
+
+      <Card animate>
+        {fournisseurs.length === 0 ? (
+          <div style={{ padding: "48px 24px", textAlign: "center", color: T.inkMuted, fontSize: 14 }}>
+            Aucun fournisseur configuré.<br />
+            <span style={{ fontSize: 13 }}>Sans fournisseur, aucun récap hebdo ne sera envoyé le vendredi.</span>
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                {["Fournisseur", "Email de réception", ""].map(h => (
+                  <th key={h} style={{
+                    textAlign: h === "Fournisseur" ? "left" : "center",
+                    padding: "10px 16px",
+                    fontSize: 10, color: T.inkMuted, fontWeight: 700,
+                    textTransform: "uppercase", letterSpacing: "0.08em",
+                  }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {fournisseurs.map((four, i) => {
+                const isEditing = editId === four.id;
+                const borderStyle = { borderBottom: i < fournisseurs.length - 1 ? `1px solid ${T.border}` : "none" };
+
+                if (isEditing) {
+                  return (
+                    <tr key={four.id} style={{ ...borderStyle, background: T.blueLight }}>
+                      <td style={{ padding: "10px 16px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <div style={{ width: 32, height: 32, borderRadius: 9, background: T.blue, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>{four.nom[0].toUpperCase()}</span>
+                          </div>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{four.nom}</span>
+                        </div>
+                      </td>
+                      <td style={{ padding: "10px 16px" }}>
+                        <input className="field-input" type="email" value={editEmail}
+                          onChange={e => setEditEmail(e.target.value)}
+                          style={{ fontSize: 12, padding: "6px 10px", width: "100%" }} />
+                      </td>
+                      <td style={{ padding: "10px 16px" }}>
+                        <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                          <Btn loading={savingEdit} style={{ fontSize: 11, padding: "4px 12px" }} onClick={async () => {
+                            setSavingEdit(true);
+                            try {
+                              await modifierFournisseur(four.id, editEmail);
+                              setEditId(null);
+                              setSucces(`Email de ${four.nom} mis à jour.`);
+                              recharger();
+                            } catch { setErreur("Erreur lors de la modification."); }
+                            finally { setSavingEdit(false); }
+                          }}>Sauvegarder</Btn>
+                          <Btn variant="secondary" style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => setEditId(null)}>Annuler</Btn>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
+
+                return (
+                  <tr key={four.id} className="table-row" style={borderStyle}>
+                    <td style={{ padding: "13px 16px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 32, height: 32, borderRadius: 9, background: T.blue + "18", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: T.blue }}>{four.nom[0].toUpperCase()}</span>
+                        </div>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{four.nom}</span>
+                      </div>
+                    </td>
+                    <td style={{ padding: "13px 16px", textAlign: "center", fontSize: 12, color: T.inkMuted, fontFamily: "'Fira Code', monospace" }}>{four.email}</td>
+                    <td style={{ padding: "13px 16px", textAlign: "center", whiteSpace: "nowrap" }}>
+                      {confirmSuppr === four.id ? (
+                        <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                          <Btn variant="danger" style={{ fontSize: 11, padding: "3px 10px" }} onClick={async () => {
+                            await supprimerFournisseur(four.id);
+                            setConfirmSuppr(null);
+                            setSucces(`${four.nom} supprimé.`);
+                            recharger();
+                          }}>Confirmer</Btn>
+                          <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px" }} onClick={() => setConfirmSuppr(null)}>Annuler</Btn>
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                          <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.blue }} onClick={() => {
+                            setEditId(four.id); setEditEmail(four.email);
+                            setConfirmSuppr(null); setSucces(""); setErreur("");
+                          }}>Modifier</Btn>
+                          <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.red }} onClick={() => { setConfirmSuppr(four.id); setEditId(null); }}>Supprimer</Btn>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </div>
+  );
+};
+
 // ─── APP PRINCIPALE ───────────────────────────────────────────────────────────
 export default function App() {
   const [user, setUser] = useState(null);
@@ -1803,6 +1994,7 @@ export default function App() {
           {page === "historique" && <VueHistorique user={user} />}
 
           {page === "gestion" && <VueGestion user={user} />}
+          {page === "fournisseurs" && <VueFournisseurs user={user} />}
           {page === "profil" && profilTech && <VueProfilTechnicien tech={profilTech} onRetour={() => { setProfilTech(null); setPage("dashboard"); }} />}
         </main>
       </div>

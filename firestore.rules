@@ -35,6 +35,14 @@ service cloud.firestore {
       allow read, delete: if false;
     }
 
+    // ─── FOURNISSEURS ────────────────────────────────────────────────────────
+    match /fournisseurs/{fourId} {
+      // Tout utilisateur authentifié peut lire (dropdowns, agent Python)
+      allow read: if isAuthenticated();
+      // Tout CA authentifié peut créer/modifier/supprimer
+      allow write: if isAuthenticated();
+    }
+
     // Tout le reste est refusé par défaut
   }
 }
