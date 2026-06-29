@@ -35,8 +35,15 @@ service cloud.firestore {
       // Tout utilisateur authentifié peut lire toutes les saisies
       allow read: if isAuthenticated();
 
-      // Écriture uniquement sur ses propres saisies (tech_id == uid)
-      allow write: if isAuthenticated()
+      // Création : le doc doit être à SON chemin (uid_date) et tech_id == uid
+      // → empêche d'écrire à l'emplacement d'un autre technicien
+      allow create: if isAuthenticated()
+        && request.auth.uid == request.resource.data.tech_id
+        && saisieId == request.auth.uid + "_" + request.resource.data.date;
+
+      // Modification : uniquement une saisie qu'on possède déjà, sans changer le propriétaire
+      allow update: if isAuthenticated()
+        && request.auth.uid == resource.data.tech_id
         && request.auth.uid == request.resource.data.tech_id;
     }
 
