@@ -25,8 +25,15 @@ service cloud.firestore {
         && request.resource.data.role == "technicien"
         && request.resource.data.charge_id == request.auth.uid;
 
-      // Un CA peut modifier / supprimer uniquement ses propres techniciens
-      allow update, delete: if isCA()
+      // Modification :
+      //  - un CA modifie ses propres techniciens (tous champs), OU
+      //  - tout utilisateur modifie UNIQUEMENT son propre champ email (pas role/charge_id)
+      allow update: if (isCA() && resource.data.charge_id == request.auth.uid)
+        || (isOwner(uid)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email']));
+
+      // Un CA peut supprimer uniquement ses propres techniciens
+      allow delete: if isCA()
         && resource.data.charge_id == request.auth.uid;
     }
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp, deleteApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, updateDoc, query, where } from "firebase/firestore";
-import { getAuth, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, createUserWithEmailAndPassword, setPersistence, browserSessionPersistence } from "firebase/auth";
+import { getAuth, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, createUserWithEmailAndPassword, setPersistence, browserSessionPersistence, verifyBeforeUpdateEmail } from "firebase/auth";
 
 // ─── FIREBASE ─────────────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -418,8 +418,32 @@ async function supprimerTechnicien(uid) {
   await setDoc(doc(db, "suppressions", uid), { uid, demande_le: new Date().toISOString() });
   await deleteDoc(doc(db, "utilisateurs", uid));
 }
-async function modifierTechnicien(uid, { mission, fournisseur }) {
-  await updateDoc(doc(db, "utilisateurs", uid), { mission, fournisseur });
+async function modifierTechnicien(uid, { mission, fournisseur, email }) {
+  const data = { mission, fournisseur };
+  if (email !== undefined && email !== "") data.email = email;
+  await updateDoc(doc(db, "utilisateurs", uid), data);
+  // L'email de CONNEXION (Firebase Auth) d'un AUTRE utilisateur ne peut pas être
+  // modifié côté client : updateEmail()/verifyBeforeUpdateEmail() ne visent que
+  // l'utilisateur courant. Seul le champ Firestore est mis à jour ici ; l'email
+  // Auth doit être changé via l'Admin SDK (agent Python) ou une Cloud Function.
+  if (data.email) {
+    console.warn(
+      `[EAE Flow] Email Firestore mis à jour pour ${uid} → ${data.email}. ` +
+      `L'email de connexion (Firebase Auth) n'est PAS modifiable côté client pour un autre utilisateur : ` +
+      `à mettre à jour via l'Admin SDK (auth.update_user).`
+    );
+  }
+  return Boolean(data.email);
+}
+// Modifie l'email de l'utilisateur COURANT : Firestore + Firebase Auth (lien de vérification)
+async function modifierMonEmail(uid, newEmail) {
+  // 1) Auth : envoie un lien de vérification à la nouvelle adresse (peut lever
+  //    auth/requires-recent-login → on remonte l'erreur sans toucher Firestore)
+  if (auth.currentUser) {
+    await verifyBeforeUpdateEmail(auth.currentUser, newEmail);
+  }
+  // 2) Firestore : email utilisé par les dashboards et les emails de récap de l'agent
+  await updateDoc(doc(db, "utilisateurs", uid), { email: newEmail });
 }
 
 const FOURNISSEURS = ["Iléo", "CUA", "Véolia", "Suez", "SEPIG", "Autre"];
@@ -797,10 +821,19 @@ const Header = ({ user, onLogout, page, onChangePage }) => {
       {/* Profil */}
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         {mission && <Badge couleur={mission.couleur} label={mission.label} onDark />}
-        <div style={{ textAlign: "right" }}>
+        <button
+          onClick={() => onChangePage("mon_profil")}
+          title="Mon profil"
+          className="btn-press"
+          style={{
+            textAlign: "right", background: page === "mon_profil" ? "rgba(255,255,255,0.10)" : "transparent",
+            border: "1px solid transparent", boxShadow: page === "mon_profil" ? `inset 0 0 0 1px ${T.navyLine}` : "none",
+            borderRadius: 8, padding: "4px 10px", cursor: "pointer",
+            transition: `background 150ms ${T.easeOut}`,
+          }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#F1F5F9" }}>{user.prenom} {user.nom}</div>
           <div style={{ fontSize: 11, color: "#7C879B" }}>{{ technicien: "Technicien", charge_affaires: "Chargé d'affaires" }[user.role] || user.role}</div>
-        </div>
+        </button>
         <button
           onClick={async () => { await signOut(auth); window.location.reload(); }}
           title="Changer de compte"
@@ -1321,7 +1354,7 @@ const VueGestion = ({ user }) => {
   const [erreur, setErreur] = useState("");
   const [confirmSuppr, setConfirmSuppr] = useState(null);
   const [editUid, setEditUid] = useState(null);
-  const [editForm, setEditForm] = useState({ mission: "", fournisseur: "" });
+  const [editForm, setEditForm] = useState({ mission: "", fournisseur: "", email: "" });
   const [savingEdit, setSavingEdit] = useState(false);
 
   const recharger = () => chargerMesTechniciens(user.uid).then(t => { setTechniciens(t); setLoading(false); });
@@ -1438,15 +1471,24 @@ const VueGestion = ({ user }) => {
                           {fournisseursList.map(f => <option key={f} value={f}>{f}</option>)}
                         </select>
                       </td>
-                      <td style={{ padding: "10px 16px", textAlign: "center", fontSize: 12, color: T.inkMuted, fontFamily: "'Fira Code', monospace" }}>{tech.email}</td>
+                      <td style={{ padding: "10px 16px" }}>
+                        <input className="field-input" type="email" value={editForm.email}
+                          onChange={e => setEditForm(p => ({ ...p, email: e.target.value }))}
+                          style={{ fontSize: 12, padding: "6px 10px", width: "100%", fontFamily: "'Fira Code', monospace" }} />
+                      </td>
                       <td style={{ padding: "10px 16px" }}>
                         <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                           <Btn loading={savingEdit} style={{ fontSize: 11, padding: "4px 12px" }} onClick={async () => {
-                            setSavingEdit(true);
+                            setSavingEdit(true); setErreur(""); setSucces("");
                             try {
+                              const emailChange = tech.email !== editForm.email;
                               await modifierTechnicien(tech.uid, editForm);
                               setEditUid(null);
-                              setSucces(`Mission de ${tech.prenom} ${tech.nom} mise à jour.`);
+                              setSucces(
+                                emailChange
+                                  ? `${tech.prenom} ${tech.nom} mis à jour. ⚠️ L'email de connexion (Auth) doit être changé via l'Admin SDK — seul l'email de réception a été modifié.`
+                                  : `${tech.prenom} ${tech.nom} mis à jour.`
+                              );
                               recharger();
                             } catch { setErreur("Erreur lors de la modification."); }
                             finally { setSavingEdit(false); }
@@ -1488,7 +1530,7 @@ const VueGestion = ({ user }) => {
                         <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                           <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.blue }} onClick={() => {
                             setEditUid(tech.uid);
-                            setEditForm({ mission: tech.mission, fournisseur: tech.fournisseur });
+                            setEditForm({ mission: tech.mission, fournisseur: tech.fournisseur, email: tech.email || "" });
                             setConfirmSuppr(null);
                             setSucces(""); setErreur("");
                           }}>Modifier</Btn>
@@ -1974,6 +2016,110 @@ const VueFournisseurs = ({ user }) => {
   );
 };
 
+// ─── VUE MON PROFIL ───────────────────────────────────────────────────────────
+const VueMonProfil = ({ user }) => {
+  const isTech = user.role === "technicien";
+  const mission = isTech ? MISSIONS[user.mission] : null;
+  const roleLabel = { technicien: "Technicien", charge_affaires: "Chargé d'affaires" }[user.role] || user.role;
+
+  const [emailActuel, setEmailActuel] = useState(user.email || auth.currentUser?.email || "");
+  const [editing, setEditing] = useState(false);
+  const [nouvelEmail, setNouvelEmail] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [succes, setSucces] = useState("");
+  const [erreur, setErreur] = useState("");
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    setSaving(true); setErreur(""); setSucces("");
+    const cible = nouvelEmail.trim();
+    if (!cible || cible === emailActuel) { setErreur("Saisis une nouvelle adresse différente."); setSaving(false); return; }
+    try {
+      await modifierMonEmail(user.uid, cible);
+      setEmailActuel(cible);
+      setEditing(false);
+      setNouvelEmail("");
+      setSucces(`Email mis à jour. Un lien de vérification a été envoyé à ${cible} — clique dessus pour confirmer ton email de connexion.`);
+    } catch (err) {
+      if (err?.code === "auth/requires-recent-login") {
+        setErreur("Pour des raisons de sécurité, reconnecte-toi (déconnexion puis reconnexion) avant de changer ton email.");
+      } else if (err?.code === "auth/email-already-in-use") {
+        setErreur("Cette adresse est déjà utilisée par un autre compte.");
+      } else if (err?.code === "auth/invalid-email") {
+        setErreur("Adresse email invalide.");
+      } else {
+        setErreur("Erreur lors de la modification de l'email.");
+      }
+    } finally { setSaving(false); }
+  };
+
+  const Ligne = ({ label, valeur, mono }) => (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 0", borderBottom: `1px solid ${T.borderSubtle}` }}>
+      <span style={{ fontSize: 12, fontWeight: 600, color: T.inkMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</span>
+      <span style={{ fontSize: 14, fontWeight: 600, color: T.ink, fontFamily: mono ? "'Fira Code', monospace" : "inherit" }}>{valeur}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ padding: "28px 24px", maxWidth: 560, margin: "0 auto" }}>
+      <div style={{ marginBottom: 24, animation: `fadeUp 250ms ${T.easeOut} both` }}>
+        <h1 style={{ fontSize: 20, fontWeight: 700, color: T.ink, letterSpacing: "-0.02em", marginBottom: 4 }}>Mon profil</h1>
+        <p style={{ fontSize: 13, color: T.inkSub }}>Tes informations de compte</p>
+      </div>
+
+      {succes && <Alert type="success" style={{ marginBottom: 20 }}>{succes}</Alert>}
+      {erreur && <Alert type="error" style={{ marginBottom: 20 }}>{erreur}</Alert>}
+
+      <Card animate style={{ padding: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18 }}>
+          <Avatar prenom={user.prenom} nom={user.nom} couleur={mission?.couleur || (isTech ? T.blueMid : T.green)} size={52} />
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: T.ink }}>{user.prenom} {user.nom}</div>
+            <div style={{ marginTop: 4 }}>
+              {mission ? <Badge couleur={mission.couleur} label={mission.label} small /> : <span style={{ fontSize: 12, color: T.inkSub }}>{roleLabel}</span>}
+            </div>
+          </div>
+        </div>
+
+        <Ligne label="Prénom" valeur={user.prenom} />
+        <Ligne label="Nom" valeur={user.nom} />
+        <Ligne label="Rôle" valeur={roleLabel} />
+        {isTech && user.fournisseur && <Ligne label="Fournisseur" valeur={user.fournisseur} />}
+
+        <div style={{ padding: "13px 0" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: T.inkMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Email</span>
+            <span style={{ fontSize: 14, fontWeight: 600, color: T.ink, fontFamily: "'Fira Code', monospace" }}>{emailActuel}</span>
+          </div>
+
+          {!editing ? (
+            <div style={{ marginTop: 14, textAlign: "right" }}>
+              <Btn variant="secondary" onClick={() => { setEditing(true); setNouvelEmail(emailActuel); setSucces(""); setErreur(""); }}>
+                Modifier mon email
+              </Btn>
+            </div>
+          ) : (
+            <form onSubmit={handleSave} style={{ marginTop: 14 }}>
+              <Field label="Nouvelle adresse email">
+                <input className="field-input" type="email" value={nouvelEmail} required
+                  onChange={e => setNouvelEmail(e.target.value)} placeholder="nouvelle@adresse.fr"
+                  style={{ fontFamily: "'Fira Code', monospace" }} />
+              </Field>
+              <p style={{ fontSize: 12, color: T.inkSub, margin: "8px 0 14px", lineHeight: 1.5 }}>
+                Un lien de vérification sera envoyé à la nouvelle adresse. Ton email de connexion ne changera qu'une fois ce lien validé.
+              </p>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <Btn variant="secondary" onClick={() => { setEditing(false); setNouvelEmail(""); setErreur(""); }}>Annuler</Btn>
+                <Btn type="submit" loading={saving}>Enregistrer</Btn>
+              </div>
+            </form>
+          )}
+        </div>
+      </Card>
+    </div>
+  );
+};
+
 // ─── APP PRINCIPALE ───────────────────────────────────────────────────────────
 export default function App() {
   const [user, setUser] = useState(null);
@@ -2012,6 +2158,7 @@ export default function App() {
 
           {page === "gestion" && <VueGestion user={user} />}
           {page === "fournisseurs" && <VueFournisseurs user={user} />}
+          {page === "mon_profil" && <VueMonProfil user={user} />}
           {page === "profil" && profilTech && <VueProfilTechnicien tech={profilTech} onRetour={() => { setProfilTech(null); setPage("dashboard"); }} />}
         </main>
       </div>
