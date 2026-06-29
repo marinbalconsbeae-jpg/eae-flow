@@ -15,6 +15,7 @@ import os
 import schedule
 import time
 import logging
+import traceback
 import anthropic
 import resend
 from firebase_client import (
@@ -26,6 +27,7 @@ from firebase_client import (
 )
 from datetime import datetime, date
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -50,6 +52,32 @@ if _RESEND_API_KEY:
     resend.api_key = _RESEND_API_KEY
 else:
     log.warning("RESEND_API_KEY non définie — les emails ne seront pas envoyés")
+
+# ─── FUSEAU HORAIRE ───────────────────────────────────────────────────────────
+# Adresse qui reçoit les alertes d'échec des tâches planifiées
+ALERTE_EMAIL = "marin.balcon.sbeae@gmail.com"
+PARIS_TZ = ZoneInfo("Europe/Paris")  # nécessite le package tzdata sur les hôtes sans base IANA
+
+def configurer_fuseau_paris():
+    """Force le process à tourner en heure de Paris (et non UTC sur Railway).
+
+    On règle TZ + time.tzset() : le scheduler (qui calcule en heure locale) et
+    toutes les dates (date.today(), est_vendredi(), …) suivent alors l'heure de
+    Paris, avec le passage heure d'été/hiver géré automatiquement par l'OS.
+    time.tzset() n'existe pas sous Windows : on log un avertissement le cas échéant.
+    """
+    os.environ["TZ"] = "Europe/Paris"
+    if hasattr(time, "tzset"):
+        time.tzset()
+        log.info(f"Fuseau horaire process : Europe/Paris — il est {datetime.now():%d/%m/%Y %H:%M %Z}")
+    else:
+        log.warning(
+            "time.tzset() indisponible (Windows) — le scheduler suivra l'heure système locale. "
+            f"Référence Paris : {datetime.now(PARIS_TZ):%H:%M %Z}"
+        )
+
+# Appliqué dès le chargement du module pour couvrir tous les points d'entrée
+configurer_fuseau_paris()
 
 # ─── CHARGEMENT DES DONNÉES ───────────────────────────────────────────────────
 def charger_config():
@@ -134,6 +162,40 @@ def envoyer_email(config, destinataire_email, destinataire_nom, sujet, corps_htm
     except Exception as e:
         log.error(f"Erreur envoi email à {destinataire_email} : {e}")
         return False
+
+# ─── ALERTE D'ÉCHEC ───────────────────────────────────────────────────────────
+def envoyer_alerte_echec(erreur, nom_tache=None):
+    """Envoie une alerte email à l'admin quand une tâche planifiée échoue.
+
+    Appelée depuis le bloc except qui entoure chaque tâche : traceback.format_exc()
+    récupère donc la stack de l'exception en cours. Toute erreur d'envoi de l'alerte
+    elle-même est loguée et avalée (ne doit jamais faire planter la boucle).
+    """
+    try:
+        trace = traceback.format_exc()
+        if not trace or trace.strip() == "NoneType: None":
+            trace = str(erreur)
+        sujet = f"[EAE Flow] ⚠️ Échec tâche {nom_tache}".strip() if nom_tache else "[EAE Flow] ⚠️ Échec d'une tâche planifiée"
+        corps = f"""
+        <html><body style="font-family: Arial, sans-serif; color: #333;">
+        <div style="max-width: 640px; margin: 0 auto; padding: 20px;">
+            <div style="background: #DC2626; color: white; padding: 16px 24px; border-radius: 8px 8px 0 0;">
+                <h2 style="margin: 0; font-size: 18px;">EAE Flow — Échec d'une tâche planifiée</h2>
+            </div>
+            <div style="background: #fff; border: 1px solid #e0e0e0; border-top: none; padding: 24px; border-radius: 0 0 8px 8px;">
+                <p style="margin: 0 0 8px;"><strong>Tâche :</strong> {nom_tache or 'inconnue'}</p>
+                <p style="margin: 0 0 8px;"><strong>Horodatage :</strong> {datetime.now():%A %d %B %Y %H:%M %Z}</p>
+                <p style="margin: 0 0 6px;"><strong>Erreur :</strong></p>
+                <pre style="background: #F8FAFC; border: 1px solid #E2E8F0; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-word; color: #991B1B;">{trace}</pre>
+                <p style="color: #999; font-size: 12px; margin-top: 16px;">Message automatique EAE Flow — surveillance des tâches.</p>
+            </div>
+        </div>
+        </body></html>
+        """
+        envoyer_email(None, ALERTE_EMAIL, "Admin EAE Flow", sujet, corps)
+        log.info(f"Alerte d'échec envoyée à {ALERTE_EMAIL} pour la tâche '{nom_tache}'")
+    except Exception as e:
+        log.error(f"Impossible d'envoyer l'alerte d'échec : {e}")
 
 # ─── SUPPRESSION COMPTES AUTH ─────────────────────────────────────────────────
 def traiter_suppressions():
@@ -656,6 +718,18 @@ def _calculer_totaux_semaine(techniciens, saisies_sem):
 
 
 # ─── PLANIFICATEUR ────────────────────────────────────────────────────────────
+def _executer_protege(tache):
+    """Enveloppe une tâche planifiée : toute exception est loguée et déclenche
+    une alerte email (envoyer_alerte_echec), sans interrompre la boucle du scheduler."""
+    def _wrapper():
+        try:
+            tache()
+        except Exception as e:
+            log.exception(f"Échec de la tâche planifiée '{tache.__name__}'")
+            envoyer_alerte_echec(e, tache.__name__)
+    return _wrapper
+
+
 def demarrer_agent():
     """Démarre l'agent et planifie les tâches."""
     config = charger_config()
@@ -674,12 +748,12 @@ def demarrer_agent():
     # Traiter les suppressions de comptes en attente (puis toutes les heures)
     traiter_suppressions()
 
-    # Planifier les tâches
-    schedule.every().day.at(horaires["rappel_saisie"]).do(tache_rappel_techniciens)
-    schedule.every().day.at(horaires["recap_journalier"]).do(tache_recap_journalier)
-    schedule.every().friday.at(horaire_hebdo).do(tache_recap_hebdo_ca)
-    schedule.every().friday.at(horaire_hebdo).do(tache_recap_hebdo_fournisseur)
-    schedule.every().hour.do(traiter_suppressions)
+    # Planifier les tâches (chacune protégée : un échec déclenche une alerte email)
+    schedule.every().day.at(horaires["rappel_saisie"]).do(_executer_protege(tache_rappel_techniciens))
+    schedule.every().day.at(horaires["recap_journalier"]).do(_executer_protege(tache_recap_journalier))
+    schedule.every().friday.at(horaire_hebdo).do(_executer_protege(tache_recap_hebdo_ca))
+    schedule.every().friday.at(horaire_hebdo).do(_executer_protege(tache_recap_hebdo_fournisseur))
+    schedule.every().hour.do(_executer_protege(traiter_suppressions))
 
     # Boucle principale
     while True:
