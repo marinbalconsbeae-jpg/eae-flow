@@ -1013,6 +1013,9 @@ const VueHistoriqueTech = ({ user }) => {
   const jours5 = JOURS.slice(0, 5);
   const champKeys = CHAMPS_PAR_MISSION[user.mission] || mission?.champs.filter(c => c.type === "number").slice(0, 4).map(c => c.key) || [];
   const champs4 = champKeys.map(k => mission?.champs.find(c => c.key === k)).filter(Boolean);
+  // Totaux semaine : TOUS les champs numériques de la mission (pas seulement les 4 principaux du tableau)
+  const champsTousNum = mission?.champs.filter(c => c.type === "number") || [];
+  const totauxCols = champsTousNum.length >= 5 ? 5 : Math.max(champsTousNum.length, 1);
 
   useEffect(() => {
     setLoading(true);
@@ -1076,24 +1079,29 @@ const VueHistoriqueTech = ({ user }) => {
             </div>
           </div>
 
-          {/* Totaux semaine */}
-          {champs4.length > 0 && (
+          {/* Totaux semaine — tous les champs numériques de la mission */}
+          {champsTousNum.length > 0 && (
             <Card animate style={{ marginBottom: 16 }}>
               <div style={{ padding: "18px 20px", borderBottom: `1px solid ${T.border}` }}>
                 <SectionLabel>Totaux semaine</SectionLabel>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: `repeat(${champs4.length}, 1fr)`, gap: 0 }}>
-                {champs4.map((champ, i) => (
-                  <div key={champ.key} style={{
-                    padding: "20px 16px", textAlign: "center",
-                    borderRight: i < champs4.length - 1 ? `1px solid ${T.border}` : "none",
-                  }}>
-                    <div style={{ fontSize: 34, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 6 }}>
-                      {totaux[champ.key] || 0}
+              <div style={{ display: "grid", gridTemplateColumns: `repeat(${totauxCols}, 1fr)`, gap: 0 }}>
+                {champsTousNum.map((champ, i) => {
+                  const dernièreColonne = (i + 1) % totauxCols === 0 || i === champsTousNum.length - 1;
+                  const dernièreLigne = i >= champsTousNum.length - (champsTousNum.length % totauxCols === 0 ? totauxCols : champsTousNum.length % totauxCols);
+                  return (
+                    <div key={champ.key} style={{
+                      padding: "16px 12px", textAlign: "center",
+                      borderRight: dernièreColonne ? "none" : `1px solid ${T.border}`,
+                      borderBottom: dernièreLigne ? "none" : `1px solid ${T.border}`,
+                    }}>
+                      <div style={{ fontSize: 26, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 5 }}>
+                        {totaux[champ.key] || 0}
+                      </div>
+                      <div style={{ fontSize: 10, color: T.inkSub, fontWeight: 500, lineHeight: 1.3 }}>{champ.label}</div>
                     </div>
-                    <div style={{ fontSize: 11, color: T.inkSub, fontWeight: 500 }}>{champ.label}</div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </Card>
           )}
