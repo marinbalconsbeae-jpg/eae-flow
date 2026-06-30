@@ -1329,15 +1329,22 @@ const VueDashboard = ({ user, onVoirProfil }) => {
   const [detailTech, setDetailTech] = useState(null); // technicien dont la modal "Totaux semaine" est ouverte
   const parMission = techniciens.reduce((acc, t) => { if (!acc[t.mission]) acc[t.mission] = []; acc[t.mission].push(t); return acc; }, {});
 
-  // Totaux hebdomadaires d'un technicien à partir de saisiesSemaine (date -> saisie)
+  // Totaux de la semaine en cours, cumulés du lundi à aujourd'hui (pas d'attente du vendredi) —
+  // à partir de saisiesSemaine (date -> saisie). On filtre explicitement les dates <= aujourd'hui
+  // pour ne jamais compter un jour futur, même si une saisie aberrante existait.
   function calcTotauxSemaine(uid) {
-    const saisies = Object.values(saisiesSemaine[uid] || {});
+    const todayKey = getDateKey();
+    const saisies = Object.entries(saisiesSemaine[uid] || {})
+      .filter(([date]) => date <= todayKey)
+      .map(([, s]) => s);
     const total = { nb_jours: saisies.length };
     saisies.forEach(s => {
       Object.keys(s).forEach(k => { if (typeof s[k] === "number" && k !== "semaine") total[k] = (total[k] || 0) + s[k]; });
     });
     return total;
   }
+  // Nombre de jours ouvrés (Lundi-Vendredi) déjà écoulés cette semaine, aujourd'hui inclus.
+  const joursEcoulesSemaine = Math.min(getJourActuel() + 1, 5);
   const autresTech = recherche.length > 1 ? tousTechs.filter(t => t.charge_id !== user.uid && (`${t.nom} ${t.prenom}`).toLowerCase().includes(recherche.toLowerCase())) : [];
   const nbNonSaisi = techniciens.filter(t => !saisiesJour[t.uid] && !estAbsentAujourdhui(t)).length;
   const nbSaisi = techniciens.length - nbNonSaisi;
@@ -1616,7 +1623,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
         const champsNum = missionDetail?.champs.filter(c => c.type === "number") || [];
         const totauxDetail = calcTotauxSemaine(detailTech.uid);
         const nbJoursDetail = totauxDetail.nb_jours || 0;
-        const completDetail = nbJoursDetail >= 5;
+        const completDetail = nbJoursDetail >= joursEcoulesSemaine;
         const statutCouleurDetail = completDetail ? T.green : nbJoursDetail > 0 ? T.amber : T.red;
 
         return (
@@ -1625,7 +1632,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
               <Avatar prenom={detailTech.prenom} nom={detailTech.nom} couleur={missionDetail?.couleur || T.inkSub} size={40} />
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 15, fontWeight: 700, color: T.ink }}>{detailTech.prenom} {detailTech.nom}</div>
-                <div style={{ fontSize: 12, color: T.inkSub }}>Semaine S{getNumeroSemaine()} · {new Date().getFullYear()}</div>
+                <div style={{ fontSize: 12, color: T.inkSub }}>Semaine S{getNumeroSemaine()} · {new Date().getFullYear()} · cumul au {new Date().toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}</div>
               </div>
               {missionDetail && <Badge couleur={missionDetail.couleur} label={missionDetail.label} small />}
             </div>
@@ -1633,7 +1640,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
             <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "12px 22px", borderBottom: `1px solid ${T.border}` }}>
               <Voyant saisi={completDetail} />
               <span style={{ fontSize: 12, fontWeight: 600, color: statutCouleurDetail }}>
-                {nbJoursDetail}/5 jours saisis
+                {nbJoursDetail}/{joursEcoulesSemaine} jours saisis
               </span>
             </div>
 
