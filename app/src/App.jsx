@@ -349,6 +349,13 @@ function getDateDuJour(jourIdx) {
   d.setDate(now.getDate() - getJourActuel() + jourIdx);
   return d.toISOString().split("T")[0];
 }
+// Comme getDateDuJour, mais pour une semaine décalée de offsetWeeks (0 = cette semaine, -1 = S-1, ...)
+function getDateDuJourSemaine(offsetWeeks, jourIdx) {
+  const now = new Date();
+  const d = new Date(now);
+  d.setDate(now.getDate() + offsetWeeks * 7 - getJourActuel() + jourIdx);
+  return d.toISOString().split("T")[0];
+}
 
 // ─── FIREBASE HELPERS ─────────────────────────────────────────────────────────
 async function chargerProfil(uid) {
@@ -362,8 +369,8 @@ async function chargerSaisiesJour() {
   snap.forEach(d => { r[d.data().tech_id] = d.data(); });
   return r;
 }
-async function chargerSaisiesSemaine(techId) {
-  const q = query(collection(db, "saisies"), where("semaine", "==", getSemaineKey()), where("tech_id", "==", techId));
+async function chargerSaisiesSemaine(techId, semaineKey = getSemaineKey()) {
+  const q = query(collection(db, "saisies"), where("semaine", "==", semaineKey), where("tech_id", "==", techId));
   const snap = await getDocs(q);
   const r = {};
   snap.forEach(d => { r[d.data().date] = d.data(); });
@@ -790,7 +797,7 @@ const Header = ({ user, onLogout, page, onChangePage }) => {
   const mission = isTech && user.mission ? MISSIONS[user.mission] : null;
 
   const navItems = isTech
-    ? [{ id: "saisie", label: "Saisie du jour" }, { id: "mon_suivi", label: "Mon suivi" }]
+    ? [{ id: "saisie", label: "Saisie du jour" }, { id: "mon_suivi", label: "Mon suivi" }, { id: "historique", label: "Historique" }]
     : [{ id: "dashboard", label: "Dashboard" }, { id: "historique", label: "Historique" }, { id: "gestion", label: "Mes techniciens" }, { id: "fournisseurs", label: "Fournisseurs" }];
 
   return (
@@ -1043,6 +1050,169 @@ const VueMonSuivi = ({ user }) => {
           })}
         </div>
       </Card>
+    </div>
+  );
+};
+
+// ─── VUE HISTORIQUE TECHNICIEN ────────────────────────────────────────────────
+// Symétrique de VueHistorique (CA) : sélecteur de semaine + détail jour par jour
+// pour le technicien connecté, réutilisant Card / Badge / Voyant.
+const VueHistoriqueTech = ({ user }) => {
+  const mission = MISSIONS[user.mission];
+  const [semOffset, setSemOffset] = useState(0);
+  const [saisiesSem, setSaisiesSem] = useState({});
+  const [loading, setLoading] = useState(true);
+
+  const semaine = getSemaineParOffset(semOffset);
+  const offsets = [0, -1, -2, -3];
+  const jours5 = JOURS.slice(0, 5);
+  const champKeys = CHAMPS_PAR_MISSION[user.mission] || mission?.champs.filter(c => c.type === "number").slice(0, 4).map(c => c.key) || [];
+  const champs4 = champKeys.map(k => mission?.champs.find(c => c.key === k)).filter(Boolean);
+
+  useEffect(() => {
+    setLoading(true);
+    chargerSaisiesSemaine(user.uid, semaine.key).then(d => { setSaisiesSem(d); setLoading(false); });
+  }, [semaine.key]);
+
+  const nbJours = jours5.filter((_, idx) => saisiesSem[getDateDuJourSemaine(semOffset, idx)]).length;
+  const complet = nbJours >= 5;
+  const statutCouleur = complet ? T.green : nbJours > 0 ? T.amber : T.red;
+
+  // Totaux hebdomadaires (somme des champs numériques de toutes les saisies chargées)
+  const totaux = {};
+  Object.values(saisiesSem).forEach(s => {
+    Object.keys(s).forEach(k => { if (typeof s[k] === "number" && k !== "semaine") totaux[k] = (totaux[k] || 0) + s[k]; });
+  });
+
+  return (
+    <div style={{ padding: "28px 24px", maxWidth: 760, margin: "0 auto" }}>
+      {/* En-tête + sélecteur de semaine (identique à VueHistorique CA) */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, animation: `fadeUp 250ms ${T.easeOut} both` }}>
+        <div>
+          <h1 style={{ fontSize: 20, fontWeight: 700, color: T.ink, letterSpacing: "-0.02em", marginBottom: 4 }}>Historique</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <p style={{ fontSize: 13, color: T.inkSub }}>Semaine S{semaine.num} · {semaine.year}</p>
+            {mission && <Badge couleur={mission.couleur} label={mission.label} small />}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 4, background: T.bg, borderRadius: 10, padding: 4 }}>
+          {offsets.map(o => {
+            const s = getSemaineParOffset(o);
+            return (
+              <button key={o} onClick={() => setSemOffset(o)} style={{
+                background: semOffset === o ? T.surface : "transparent",
+                color: semOffset === o ? T.ink : T.inkSub,
+                border: "none", borderRadius: 7, padding: "5px 14px",
+                fontSize: 13, fontWeight: semOffset === o ? 600 : 500,
+                cursor: "pointer",
+                boxShadow: semOffset === o ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                transition: `all 180ms ${T.easeOut}`,
+              }}>
+                {o === 0 ? "Cette sem." : `S${s.num}`}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {loading ? <Spinner /> : (
+        <>
+          {/* Bandeau résumé */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "0 2px" }}>
+            <div style={{ width: 3, height: 16, borderRadius: 99, background: mission?.couleur }} />
+            <span style={{ fontSize: 11, fontWeight: 700, color: T.inkMid, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              Détail jour par jour
+            </span>
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 7 }}>
+              <Voyant saisi={complet} />
+              <span style={{ fontSize: 12, fontWeight: 600, color: statutCouleur }}>
+                {nbJours}/5 jours saisis
+              </span>
+            </div>
+          </div>
+
+          <Card style={{ marginBottom: 24 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                  {["Jour", "Date", ...champs4.map(c => c.label), "Heures", "Statut"].map(h => (
+                    <th key={h} style={{
+                      textAlign: h === "Jour" ? "left" : "center",
+                      padding: "10px 16px",
+                      fontSize: 10, color: T.inkMuted, fontWeight: 700,
+                      textTransform: "uppercase", letterSpacing: "0.08em",
+                    }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {jours5.map((jour, idx) => {
+                  const dateStr = getDateDuJourSemaine(semOffset, idx);
+                  const saisie = saisiesSem[dateStr];
+                  return (
+                    <tr key={jour} className="table-row" style={{
+                      borderBottom: idx < jours5.length - 1 ? `1px solid ${T.border}` : "none",
+                      background: !saisie ? "#FFFBFB" : T.surface,
+                    }}>
+                      <td style={{ padding: "13px 16px", fontSize: 13, fontWeight: 600, color: T.ink }}>{jour}</td>
+                      <td style={{ padding: "13px 16px", textAlign: "center", fontSize: 12, color: T.inkSub, fontFamily: "'Fira Code', monospace" }}>
+                        {new Date(dateStr + "T00:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
+                      </td>
+                      {champs4.map((champ, ci) => (
+                        <td key={champ.key} style={{ padding: "13px 16px", textAlign: "center" }}>
+                          <span style={{
+                            fontSize: ci === 0 ? 16 : 14,
+                            fontWeight: ci === 0 ? 700 : 600,
+                            color: saisie ? (ci === 0 ? mission?.couleur : T.inkMid) : T.border,
+                            fontFamily: "'Fira Code', monospace",
+                          }}>
+                            {saisie ? (saisie[champ.key] ?? 0) : "—"}
+                          </span>
+                        </td>
+                      ))}
+                      <td style={{ padding: "13px 16px", textAlign: "center" }}>
+                        <span style={{ fontSize: 13, color: saisie ? T.inkSub : T.border, fontFamily: "'Fira Code', monospace" }}>
+                          {saisie ? `${saisie.total_heures || 0}h` : "—"}
+                        </span>
+                      </td>
+                      <td style={{ padding: "13px 16px" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+                          <Voyant saisi={!!saisie} />
+                          <span style={{ fontSize: 12, fontWeight: 500, color: saisie ? T.green : T.red, whiteSpace: "nowrap" }}>
+                            {saisie ? "Saisi" : "Non saisi"}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Card>
+
+          {/* Totaux semaine */}
+          {champs4.length > 0 && (
+            <Card animate>
+              <div style={{ padding: "18px 20px", borderBottom: `1px solid ${T.border}` }}>
+                <SectionLabel>Totaux semaine</SectionLabel>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: `repeat(${champs4.length}, 1fr)`, gap: 0 }}>
+                {champs4.map((champ, i) => (
+                  <div key={champ.key} style={{
+                    padding: "20px 16px", textAlign: "center",
+                    borderRight: i < champs4.length - 1 ? `1px solid ${T.border}` : "none",
+                  }}>
+                    <div style={{ fontSize: 34, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 6 }}>
+                      {totaux[champ.key] || 0}
+                    </div>
+                    <div style={{ fontSize: 11, color: T.inkSub, fontWeight: 500 }}>{champ.label}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </>
+      )}
     </div>
   );
 };
@@ -2223,7 +2393,7 @@ export default function App() {
           {page === "saisie" && <VueSaisie user={user} />}
           {page === "mon_suivi" && <VueMonSuivi user={user} />}
           {page === "dashboard" && <VueDashboard user={user} onVoirProfil={t => { setProfilTech(t); setPage("profil"); }} />}
-          {page === "historique" && <VueHistorique user={user} />}
+          {page === "historique" && (user.role === "technicien" ? <VueHistoriqueTech user={user} /> : <VueHistorique user={user} />)}
 
           {page === "gestion" && <VueGestion user={user} />}
           {page === "fournisseurs" && <VueFournisseurs user={user} />}
