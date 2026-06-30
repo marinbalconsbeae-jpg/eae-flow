@@ -2000,6 +2000,7 @@ const VueHistorique = ({ user }) => {
   const [techniciens, setTechniciens] = useState([]);
   const [saisiesParTech, setSaisiesParTech] = useState({});
   const [loading, setLoading] = useState(true);
+  const [detailTech, setDetailTech] = useState(null); // technicien dont la modal "Totaux semaine" est ouverte
 
   const semaine = getSemaineParOffset(semOffset);
   const offsets = [0, -1, -2, -3];
@@ -2122,7 +2123,11 @@ const VueHistorique = ({ user }) => {
                             <td style={{ padding: "13px 16px" }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                                 <Avatar prenom={tech.prenom} nom={tech.nom} couleur={mission?.couleur || T.inkSub} size={32} />
-                                <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{tech.prenom} {tech.nom}</span>
+                                <span
+                                  onClick={() => setDetailTech(tech)}
+                                  title="Voir tous les totaux de la semaine"
+                                  style={{ fontSize: 13, fontWeight: 600, color: T.blue, cursor: "pointer", textDecoration: "underline", textDecorationColor: T.blue + "60" }}
+                                >{tech.prenom} {tech.nom}</span>
                               </div>
                             </td>
                             <td style={{ padding: "13px 16px", textAlign: "center" }}>
@@ -2166,6 +2171,55 @@ const VueHistorique = ({ user }) => {
           })
         )
       )}
+
+      {/* Modal détail complet des totaux semaine — TOUS les champs de la mission, pas seulement les 4 du tableau */}
+      {detailTech && (() => {
+        const missionDetail = MISSIONS[detailTech.mission];
+        const champsNum = missionDetail?.champs.filter(c => c.type === "number") || [];
+        const totauxDetail = calcTotaux(detailTech.uid);
+        const nbJoursDetail = totauxDetail.nb_jours || 0;
+        const completDetail = nbJoursDetail >= 5;
+        const statutCouleurDetail = completDetail ? T.green : nbJoursDetail > 0 ? T.amber : T.red;
+
+        return (
+          <Modal maxWidth={460} onClose={() => setDetailTech(null)}>
+            <div style={{ padding: "18px 22px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 12 }}>
+              <Avatar prenom={detailTech.prenom} nom={detailTech.nom} couleur={missionDetail?.couleur || T.inkSub} size={40} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: T.ink }}>{detailTech.prenom} {detailTech.nom}</div>
+                <div style={{ fontSize: 12, color: T.inkSub }}>Semaine S{semaine.num} · {semaine.year}</div>
+              </div>
+              {missionDetail && <Badge couleur={missionDetail.couleur} label={missionDetail.label} small />}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "12px 22px", borderBottom: `1px solid ${T.border}` }}>
+              <Voyant saisi={completDetail} />
+              <span style={{ fontSize: 12, fontWeight: 600, color: statutCouleurDetail }}>
+                {nbJoursDetail}/5 jours saisis
+              </span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)" }}>
+              {champsNum.map((champ, i) => (
+                <div key={champ.key} style={{
+                  padding: "16px 12px", textAlign: "center",
+                  borderRight: (i + 1) % 3 !== 0 ? `1px solid ${T.border}` : "none",
+                  borderBottom: i < champsNum.length - (champsNum.length % 3 === 0 ? 3 : champsNum.length % 3) ? `1px solid ${T.border}` : "none",
+                }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: missionDetail?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 5 }}>
+                    {totauxDetail[champ.key] || 0}
+                  </div>
+                  <div style={{ fontSize: 10, color: T.inkSub, fontWeight: 500, lineHeight: 1.3 }}>{champ.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ padding: "14px 22px", borderTop: `1px solid ${T.border}`, textAlign: "right" }}>
+              <Btn variant="secondary" onClick={() => setDetailTech(null)}>Fermer</Btn>
+            </div>
+          </Modal>
+        );
+      })()}
     </div>
   );
 };
