@@ -401,9 +401,10 @@ async function chargerTousTechniciens() {
   const snap = await getDocs(q);
   return snap.docs.map(d => ({ uid: d.id, ...d.data() }));
 }
-async function sauvegarderSaisie(techId, data) {
+async function sauvegarderSaisie(techId, data, mission) {
   await setDoc(doc(db, "saisies", `${techId}_${getDateKey()}`), {
     ...data, tech_id: techId, date: getDateKey(), semaine: getSemaineKey(),
+    mission_au_moment_saisie: mission,
     timestamp: new Date().toISOString(),
   });
 }
@@ -914,7 +915,7 @@ const VueSaisie = ({ user }) => {
     if (dejaModifie) return;
     setStatut("saving");
     try {
-      await sauvegarderSaisie(user.uid, { ...form, modifie: !!form.tech_id });
+      await sauvegarderSaisie(user.uid, { ...form, modifie: !!form.tech_id }, user.mission);
       setStatut("saved");
       if (form.tech_id) setDejaModifie(true);
     } catch { setStatut("error"); }
@@ -1013,8 +1014,22 @@ const VueHistoriqueTech = ({ user }) => {
   const jours5 = JOURS.slice(0, 5);
   const champKeys = CHAMPS_PAR_MISSION[user.mission] || mission?.champs.filter(c => c.type === "number").slice(0, 4).map(c => c.key) || [];
   const champs4 = champKeys.map(k => mission?.champs.find(c => c.key === k)).filter(Boolean);
-  // Totaux semaine : TOUS les champs numériques de la mission (pas seulement les 4 principaux du tableau)
-  const champsTousNum = mission?.champs.filter(c => c.type === "number") || [];
+  // Totaux semaine : union des champs numériques de TOUTES les missions effectivement utilisées
+  // cette semaine (saisie.mission_au_moment_saisie, fallback mission actuelle pour anciennes saisies) —
+  // pas seulement la mission actuelle, au cas où elle aurait changé en cours de semaine.
+  const missionsSemaineMap = new Map();
+  Object.values(saisiesSem).forEach(s => {
+    const mKey = s.mission_au_moment_saisie || user.mission;
+    if (!missionsSemaineMap.has(mKey)) missionsSemaineMap.set(mKey, MISSIONS[mKey]);
+  });
+  if (missionsSemaineMap.size === 0) missionsSemaineMap.set(user.mission, mission);
+  const champsTousNumMap = new Map();
+  missionsSemaineMap.forEach(m => {
+    (m?.champs || []).filter(c => c.type === "number").forEach(c => {
+      if (!champsTousNumMap.has(c.key)) champsTousNumMap.set(c.key, c);
+    });
+  });
+  const champsTousNum = Array.from(champsTousNumMap.values());
   const totauxCols = champsTousNum.length >= 5 ? 5 : Math.max(champsTousNum.length, 1);
 
   useEffect(() => {
@@ -1173,7 +1188,9 @@ const VueHistoriqueTech = ({ user }) => {
 
       {/* Modal détail complet d'une journée — TOUS les champs de la mission, pas seulement les 4 principaux */}
       {detailJour && (() => {
-        const champsNum = mission?.champs.filter(c => c.type === "number") || [];
+        // Mission au moment de CETTE saisie (fallback : mission actuelle pour les anciennes saisies sans le champ)
+        const missionJour = MISSIONS[detailJour.saisie.mission_au_moment_saisie || user.mission];
+        const champsNum = missionJour?.champs.filter(c => c.type === "number") || [];
         return (
           <Modal maxWidth={460} onClose={() => setDetailJour(null)}>
             <div style={{ padding: "18px 22px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -1183,7 +1200,7 @@ const VueHistoriqueTech = ({ user }) => {
                   {new Date(detailJour.dateStr + "T00:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}
                 </div>
               </div>
-              {mission && <Badge couleur={mission.couleur} label={mission.label} small />}
+              {missionJour && <Badge couleur={missionJour.couleur} label={missionJour.label} small />}
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)" }}>
@@ -1193,7 +1210,7 @@ const VueHistoriqueTech = ({ user }) => {
                   borderRight: (i + 1) % 3 !== 0 ? `1px solid ${T.border}` : "none",
                   borderBottom: i < champsNum.length - (champsNum.length % 3 === 0 ? 3 : champsNum.length % 3) ? `1px solid ${T.border}` : "none",
                 }}>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 5 }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: missionJour?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 5 }}>
                     {detailJour.saisie[champ.key] ?? 0}
                   </div>
                   <div style={{ fontSize: 10, color: T.inkSub, fontWeight: 500, lineHeight: 1.3 }}>{champ.label}</div>
@@ -2159,7 +2176,23 @@ const VueHistorique = ({ user }) => {
       {/* Modal détail complet des totaux semaine — TOUS les champs de la mission, pas seulement les 4 du tableau */}
       {detailTech && (() => {
         const missionDetail = MISSIONS[detailTech.mission];
-        const champsNum = missionDetail?.champs.filter(c => c.type === "number") || [];
+        // Union des champs numériques de TOUTES les missions effectivement utilisées dans les
+        // saisies de la semaine (saisie.mission_au_moment_saisie, fallback mission actuelle du
+        // technicien pour les anciennes saisies sans ce champ) — pas seulement sa mission actuelle.
+        const saisiesDetail = saisiesParTech[detailTech.uid] || [];
+        const missionsUtiliseesMap = new Map();
+        saisiesDetail.forEach(s => {
+          const mKey = s.mission_au_moment_saisie || detailTech.mission;
+          if (!missionsUtiliseesMap.has(mKey)) missionsUtiliseesMap.set(mKey, MISSIONS[mKey]);
+        });
+        if (missionsUtiliseesMap.size === 0) missionsUtiliseesMap.set(detailTech.mission, missionDetail);
+        const champsNumMap = new Map();
+        missionsUtiliseesMap.forEach(m => {
+          (m?.champs || []).filter(c => c.type === "number").forEach(c => {
+            if (!champsNumMap.has(c.key)) champsNumMap.set(c.key, c);
+          });
+        });
+        const champsNum = Array.from(champsNumMap.values());
         const totauxDetail = calcTotaux(detailTech.uid);
         const nbJoursDetail = totauxDetail.nb_jours || 0;
         const completDetail = nbJoursDetail >= 5;
