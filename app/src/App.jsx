@@ -1326,7 +1326,18 @@ const VueDashboard = ({ user, onVoirProfil }) => {
   }, []);
 
   const [openComment, setOpenComment] = useState(null);
+  const [detailTech, setDetailTech] = useState(null); // technicien dont la modal "Totaux semaine" est ouverte
   const parMission = techniciens.reduce((acc, t) => { if (!acc[t.mission]) acc[t.mission] = []; acc[t.mission].push(t); return acc; }, {});
+
+  // Totaux hebdomadaires d'un technicien à partir de saisiesSemaine (date -> saisie)
+  function calcTotauxSemaine(uid) {
+    const saisies = Object.values(saisiesSemaine[uid] || {});
+    const total = { nb_jours: saisies.length };
+    saisies.forEach(s => {
+      Object.keys(s).forEach(k => { if (typeof s[k] === "number" && k !== "semaine") total[k] = (total[k] || 0) + s[k]; });
+    });
+    return total;
+  }
   const autresTech = recherche.length > 1 ? tousTechs.filter(t => t.charge_id !== user.uid && (`${t.nom} ${t.prenom}`).toLowerCase().includes(recherche.toLowerCase())) : [];
   const nbNonSaisi = techniciens.filter(t => !saisiesJour[t.uid] && !estAbsentAujourdhui(t)).length;
   const nbSaisi = techniciens.length - nbNonSaisi;
@@ -1562,8 +1573,6 @@ const VueDashboard = ({ user, onVoirProfil }) => {
               <tbody>
                 {techniciens.map((tech, i) => {
                   const mission = MISSIONS[tech.mission];
-                  const champKeys = CHAMPS_PAR_MISSION[tech.mission] || [];
-                  const champPrincipal = champKeys.map(k => mission?.champs.find(c => c.key === k)).find(Boolean);
                   const semTech = saisiesSemaine[tech.uid] || {};
                   const jourActuel = getJourActuel();
 
@@ -1573,7 +1582,11 @@ const VueDashboard = ({ user, onVoirProfil }) => {
                         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
                           <Avatar prenom={tech.prenom} nom={tech.nom} couleur={mission?.couleur || T.inkSub} size={28} />
                           <div>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: T.ink, lineHeight: 1.2 }}>{tech.prenom} {tech.nom}</div>
+                            <div
+                              onClick={() => setDetailTech(tech)}
+                              title="Voir tous les totaux de la semaine"
+                              style={{ fontSize: 13, fontWeight: 600, color: T.blue, lineHeight: 1.2, cursor: "pointer", textDecoration: "underline", textDecorationColor: T.blue + "60", width: "fit-content" }}
+                            >{tech.prenom} {tech.nom}</div>
                             {mission && <Badge couleur={mission.couleur} label={mission.label} small />}
                           </div>
                         </div>
@@ -1582,19 +1595,9 @@ const VueDashboard = ({ user, onVoirProfil }) => {
                         const date = getDateDuJour(idx);
                         const saisie = semTech[date];
                         const estFutur = idx > jourActuel;
-                        const valeur = saisie && champPrincipal ? (saisie[champPrincipal.key] ?? 0) : null;
                         return (
                           <td key={jour} style={{ padding: "10px 12px", textAlign: "center", opacity: estFutur ? 0.3 : 1 }}>
-                            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                              <Voyant saisi={!!saisie} size={7} />
-                              {saisie && valeur !== null ? (
-                                <span style={{ fontSize: 13, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace" }}>
-                                  {valeur}
-                                </span>
-                              ) : !estFutur && !saisie ? (
-                                <span style={{ fontSize: 11, color: T.border }}>—</span>
-                              ) : null}
-                            </div>
+                            <Voyant saisi={!!saisie} size={7} />
                           </td>
                         );
                       })}
@@ -1606,6 +1609,55 @@ const VueDashboard = ({ user, onVoirProfil }) => {
           </Card>
         </div>
       )}
+
+      {/* Modal détail complet des totaux semaine — TOUS les champs de la mission */}
+      {detailTech && (() => {
+        const missionDetail = MISSIONS[detailTech.mission];
+        const champsNum = missionDetail?.champs.filter(c => c.type === "number") || [];
+        const totauxDetail = calcTotauxSemaine(detailTech.uid);
+        const nbJoursDetail = totauxDetail.nb_jours || 0;
+        const completDetail = nbJoursDetail >= 5;
+        const statutCouleurDetail = completDetail ? T.green : nbJoursDetail > 0 ? T.amber : T.red;
+
+        return (
+          <Modal maxWidth={460} onClose={() => setDetailTech(null)}>
+            <div style={{ padding: "18px 22px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 12 }}>
+              <Avatar prenom={detailTech.prenom} nom={detailTech.nom} couleur={missionDetail?.couleur || T.inkSub} size={40} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: T.ink }}>{detailTech.prenom} {detailTech.nom}</div>
+                <div style={{ fontSize: 12, color: T.inkSub }}>Semaine S{getNumeroSemaine()} · {new Date().getFullYear()}</div>
+              </div>
+              {missionDetail && <Badge couleur={missionDetail.couleur} label={missionDetail.label} small />}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "12px 22px", borderBottom: `1px solid ${T.border}` }}>
+              <Voyant saisi={completDetail} />
+              <span style={{ fontSize: 12, fontWeight: 600, color: statutCouleurDetail }}>
+                {nbJoursDetail}/5 jours saisis
+              </span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)" }}>
+              {champsNum.map((champ, i) => (
+                <div key={champ.key} style={{
+                  padding: "16px 12px", textAlign: "center",
+                  borderRight: (i + 1) % 3 !== 0 ? `1px solid ${T.border}` : "none",
+                  borderBottom: i < champsNum.length - (champsNum.length % 3 === 0 ? 3 : champsNum.length % 3) ? `1px solid ${T.border}` : "none",
+                }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: missionDetail?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 5 }}>
+                    {totauxDetail[champ.key] || 0}
+                  </div>
+                  <div style={{ fontSize: 10, color: T.inkSub, fontWeight: 500, lineHeight: 1.3 }}>{champ.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ padding: "14px 22px", borderTop: `1px solid ${T.border}`, textAlign: "right" }}>
+              <Btn variant="secondary" onClick={() => setDetailTech(null)}>Fermer</Btn>
+            </div>
+          </Modal>
+        );
+      })()}
     </div>
   );
 };
