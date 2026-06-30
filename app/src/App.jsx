@@ -646,6 +646,32 @@ const SectionLabel = ({ children }) => (
   </div>
 );
 
+// Modal centrée avec backdrop — fermeture au clic en dehors ou sur Échap
+const Modal = ({ onClose, children, maxWidth = 420 }) => {
+  useEffect(() => {
+    const onKey = e => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 300,
+      background: "rgba(10,14,23,0.45)", backdropFilter: "blur(2px)",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+      animation: `fadeIn 150ms ease both`,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: T.surface, borderRadius: 16, boxShadow: T.shadowXl,
+        maxWidth, width: "100%", maxHeight: "85vh", overflow: "auto",
+        animation: `slideDown 180ms ${T.easeOut} both`,
+      }}>
+        {children}
+      </div>
+    </div>
+  );
+};
+
 // ─── ÉCRAN CONNEXION ──────────────────────────────────────────────────────────
 const VueConnexion = ({ onLogin }) => {
   const [email, setEmail] = useState("");
@@ -978,7 +1004,8 @@ const VueMonSuivi = ({ user }) => {
   const jourActuel = getJourActuel();
   const [saisiesSem, setSaisiesSem] = useState({});
   const [loading, setLoading] = useState(true);
-  const champsPrincipaux = mission?.champs.filter(c => c.type === "number").slice(0, 3) || [];
+  const champKeys = CHAMPS_PAR_MISSION[user.mission] || mission?.champs.filter(c => c.type === "number").slice(0, 3).map(c => c.key) || [];
+  const champsPrincipaux = champKeys.map(k => mission?.champs.find(c => c.key === k)).filter(Boolean);
 
   useEffect(() => {
     chargerSaisiesSemaine(user.uid).then(d => { setSaisiesSem(d); setLoading(false); });
@@ -1033,7 +1060,7 @@ const VueMonSuivi = ({ user }) => {
         <div style={{ padding: "18px 20px", borderBottom: `1px solid ${T.border}` }}>
           <SectionLabel>Totaux semaine</SectionLabel>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${champsPrincipaux.length || 1}, 1fr)`, gap: 0 }}>
           {champsPrincipaux.map((champ, i) => {
             const total = JOURS.reduce((acc, _, idx) => acc + ((saisiesSem[getDateDuJour(idx)]?.[champ.key]) || 0), 0);
             return (
@@ -1062,6 +1089,7 @@ const VueHistoriqueTech = ({ user }) => {
   const [semOffset, setSemOffset] = useState(0);
   const [saisiesSem, setSaisiesSem] = useState({});
   const [loading, setLoading] = useState(true);
+  const [detailJour, setDetailJour] = useState(null); // { jour, dateStr, saisie } | null
 
   const semaine = getSemaineParOffset(semOffset);
   const offsets = [0, -1, -2, -3];
@@ -1150,10 +1178,14 @@ const VueHistoriqueTech = ({ user }) => {
                   const dateStr = getDateDuJourSemaine(semOffset, idx);
                   const saisie = saisiesSem[dateStr];
                   return (
-                    <tr key={jour} className="table-row" style={{
-                      borderBottom: idx < jours5.length - 1 ? `1px solid ${T.border}` : "none",
-                      background: !saisie ? "#FFFBFB" : T.surface,
-                    }}>
+                    <tr key={jour} className="table-row"
+                      onClick={() => saisie && setDetailJour({ jour, dateStr, saisie })}
+                      title={saisie ? "Voir le détail de la journée" : undefined}
+                      style={{
+                        borderBottom: idx < jours5.length - 1 ? `1px solid ${T.border}` : "none",
+                        background: !saisie ? "#FFFBFB" : T.surface,
+                        cursor: saisie ? "pointer" : "default",
+                      }}>
                       <td style={{ padding: "13px 16px", fontSize: 13, fontWeight: 600, color: T.ink }}>{jour}</td>
                       <td style={{ padding: "13px 16px", textAlign: "center", fontSize: 12, color: T.inkSub, fontFamily: "'Fira Code', monospace" }}>
                         {new Date(dateStr + "T00:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
@@ -1213,6 +1245,50 @@ const VueHistoriqueTech = ({ user }) => {
           )}
         </>
       )}
+
+      {/* Modal détail complet d'une journée — TOUS les champs de la mission, pas seulement les 4 principaux */}
+      {detailJour && (() => {
+        const champsNum = mission?.champs.filter(c => c.type === "number") || [];
+        return (
+          <Modal maxWidth={460} onClose={() => setDetailJour(null)}>
+            <div style={{ padding: "18px 22px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: T.ink }}>{detailJour.jour}</div>
+                <div style={{ fontSize: 12, color: T.inkSub }}>
+                  {new Date(detailJour.dateStr + "T00:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}
+                </div>
+              </div>
+              {mission && <Badge couleur={mission.couleur} label={mission.label} small />}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)" }}>
+              {champsNum.map((champ, i) => (
+                <div key={champ.key} style={{
+                  padding: "16px 12px", textAlign: "center",
+                  borderRight: (i + 1) % 3 !== 0 ? `1px solid ${T.border}` : "none",
+                  borderBottom: i < champsNum.length - (champsNum.length % 3 === 0 ? 3 : champsNum.length % 3) ? `1px solid ${T.border}` : "none",
+                }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 5 }}>
+                    {detailJour.saisie[champ.key] ?? 0}
+                  </div>
+                  <div style={{ fontSize: 10, color: T.inkSub, fontWeight: 500, lineHeight: 1.3 }}>{champ.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {detailJour.saisie.commentaires && (
+              <div style={{ padding: "14px 22px", borderTop: `1px solid ${T.border}`, fontSize: 13, color: T.inkMid, lineHeight: 1.5 }}>
+                <span style={{ fontWeight: 700, fontSize: 11, color: T.inkMuted, textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 4 }}>Commentaires</span>
+                {detailJour.saisie.commentaires}
+              </div>
+            )}
+
+            <div style={{ padding: "14px 22px", borderTop: `1px solid ${T.border}`, textAlign: "right" }}>
+              <Btn variant="secondary" onClick={() => setDetailJour(null)}>Fermer</Btn>
+            </div>
+          </Modal>
+        );
+      })()}
     </div>
   );
 };
@@ -1548,7 +1624,7 @@ const VueGestion = ({ user }) => {
   const [editUid, setEditUid] = useState(null);
   const [editForm, setEditForm] = useState({ mission: "", fournisseur: "", email: "" });
   const [savingEdit, setSavingEdit] = useState(false);
-  const [absenceUid, setAbsenceUid] = useState(null);
+  const [absenceTech, setAbsenceTech] = useState(null); // technicien dont la modal "Marquer absent" est ouverte
   const [dateRetour, setDateRetour] = useState("");
   const [savingAbsence, setSavingAbsence] = useState(false);
 
@@ -1730,30 +1806,11 @@ const VueGestion = ({ user }) => {
                           }}>Confirmer</Btn>
                           <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px" }} onClick={() => setConfirmSuppr(null)}>Annuler</Btn>
                         </div>
-                      ) : absenceUid === tech.uid ? (
-                        <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center" }}>
-                          <input type="date" className="field-input" value={dateRetour} min={getDateKey()}
-                            onChange={e => setDateRetour(e.target.value)}
-                            style={{ fontSize: 12, padding: "5px 8px", width: 134 }} />
-                          <Btn loading={savingAbsence} style={{ fontSize: 11, padding: "4px 10px" }} onClick={async () => {
-                            if (!dateRetour) { setErreur("Choisis une date de retour."); return; }
-                            setSavingAbsence(true); setErreur("");
-                            try {
-                              await marquerAbsentTechnicien(tech.uid, dateRetour);
-                              setSucces(`${tech.prenom} ${tech.nom} marqué absent jusqu'au ${new Date(dateRetour + "T00:00:00").toLocaleDateString("fr-FR")}.`);
-                              setAbsenceUid(null); setDateRetour("");
-                              recharger();
-                            } catch { setErreur("Erreur lors du marquage d'absence."); }
-                            finally { setSavingAbsence(false); }
-                          }}>Confirmer</Btn>
-                          <Btn variant="secondary" style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => { setAbsenceUid(null); setDateRetour(""); }}>Annuler</Btn>
-                        </div>
                       ) : (
                         <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
                           <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.blue }} onClick={() => {
                             setEditUid(tech.uid);
                             setEditForm({ mission: tech.mission, fournisseur: tech.fournisseur, email: tech.email || "" });
-                            setAbsenceUid(null);
                             setConfirmSuppr(null);
                             setSucces(""); setErreur("");
                           }}>Modifier</Btn>
@@ -1768,12 +1825,12 @@ const VueGestion = ({ user }) => {
                             }}>Marquer présent</Btn>
                           ) : (
                             <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.amber }} onClick={() => {
-                              setAbsenceUid(tech.uid); setDateRetour("");
+                              setAbsenceTech(tech); setDateRetour("");
                               setEditUid(null); setConfirmSuppr(null);
                               setSucces(""); setErreur("");
                             }}>Marquer absent</Btn>
                           )}
-                          <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.red }} onClick={() => { setConfirmSuppr(tech.uid); setEditUid(null); setAbsenceUid(null); }}>Supprimer</Btn>
+                          <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.red }} onClick={() => { setConfirmSuppr(tech.uid); setEditUid(null); }}>Supprimer</Btn>
                         </div>
                       )}
                     </td>
@@ -1784,6 +1841,42 @@ const VueGestion = ({ user }) => {
           </table>
         )}
       </Card>
+
+      {/* Modal "Marquer absent" — centrée, ne déforme jamais la ligne du tableau */}
+      {absenceTech && (
+        <Modal maxWidth={380} onClose={() => { setAbsenceTech(null); setDateRetour(""); }}>
+          <div style={{ padding: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+              <Avatar prenom={absenceTech.prenom} nom={absenceTech.nom} couleur={MISSIONS[absenceTech.mission]?.couleur || T.inkSub} size={36} />
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>Marquer absent</div>
+                <div style={{ fontSize: 12, color: T.inkSub }}>{absenceTech.prenom} {absenceTech.nom}</div>
+              </div>
+            </div>
+            <Field label="Date de retour prévue">
+              <input type="date" className="field-input" value={dateRetour} min={getDateKey()}
+                onChange={e => setDateRetour(e.target.value)} autoFocus />
+            </Field>
+            <p style={{ fontSize: 12, color: T.inkMuted, margin: "8px 0 18px" }}>
+              Le technicien sera exclu des rappels et compteurs "non saisi" jusqu'à cette date incluse.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <Btn variant="secondary" onClick={() => { setAbsenceTech(null); setDateRetour(""); }}>Annuler</Btn>
+              <Btn loading={savingAbsence} onClick={async () => {
+                if (!dateRetour) { setErreur("Choisis une date de retour."); return; }
+                setSavingAbsence(true); setErreur("");
+                try {
+                  await marquerAbsentTechnicien(absenceTech.uid, dateRetour);
+                  setSucces(`${absenceTech.prenom} ${absenceTech.nom} marqué absent jusqu'au ${new Date(dateRetour + "T00:00:00").toLocaleDateString("fr-FR")}.`);
+                  setAbsenceTech(null); setDateRetour("");
+                  recharger();
+                } catch { setErreur("Erreur lors du marquage d'absence."); }
+                finally { setSavingAbsence(false); }
+              }}>Confirmer</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };
