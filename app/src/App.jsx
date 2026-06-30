@@ -377,18 +377,44 @@ async function chargerSaisiesSemaine(techId, semaineKey = getSemaineKey()) {
   return r;
 }
 async function chargerHistoriqueSemaine(caId, semaineKey) {
-  const techs = await chargerMesTechniciens(caId);
-  const techUids = new Set(techs.map(t => t.uid));
+  // On a besoin de DEUX listes : le roster actuel de ce CA (pour afficher même les
+  // techniciens sans saisie cette semaine), et TOUS les techniciens (pour résoudre,
+  // via fallback, le CA d'un technicien sur les saisies anciennes sans le champ
+  // charge_id_au_moment_saisie).
+  const [techsActuels, tousTechs] = await Promise.all([
+    chargerMesTechniciens(caId),
+    chargerTousTechniciens(),
+  ]);
+  const techsParUid = Object.fromEntries(tousTechs.map(t => [t.uid, t]));
+
   const q = query(collection(db, "saisies"), where("semaine", "==", semaineKey));
   const snap = await getDocs(q);
+
+  // Chaque saisie est attribuée au CA en vigueur AU MOMENT où elle a été faite
+  // (charge_id_au_moment_saisie), avec repli sur le charge_id actuel du technicien
+  // pour les saisies antérieures à ce champ. Un technicien transféré vers un autre
+  // CA en cours de semaine apparaît donc ici avec uniquement les jours où il
+  // dépendait réellement de ce CA — pas la semaine entière, et pas zéro non plus.
   const saisiesParTech = {};
+  const uidsAvecSaisieCA = new Set();
   snap.forEach(d => {
     const data = d.data();
-    if (techUids.has(data.tech_id)) {
-      if (!saisiesParTech[data.tech_id]) saisiesParTech[data.tech_id] = [];
-      saisiesParTech[data.tech_id].push(data);
-    }
+    const tech = techsParUid[data.tech_id];
+    if (!tech) return; // technicien supprimé entre-temps
+    const caSaisie = data.charge_id_au_moment_saisie || tech.charge_id;
+    if (caSaisie !== caId) return;
+    uidsAvecSaisieCA.add(data.tech_id);
+    if (!saisiesParTech[data.tech_id]) saisiesParTech[data.tech_id] = [];
+    saisiesParTech[data.tech_id].push(data);
   });
+
+  // Techniciens à afficher : ceux actuellement rattachés à ce CA (même sans saisie
+  // cette semaine) + ceux dont au moins une saisie de la semaine lui est attribuée
+  // (transférés depuis, mais dont les jours antérieurs au transfert restent visibles).
+  const uidsActuels = new Set(techsActuels.map(t => t.uid));
+  const uidsAAfficher = new Set([...uidsActuels, ...uidsAvecSaisieCA]);
+  const techs = [...uidsAAfficher].map(uid => techsParUid[uid]).filter(Boolean);
+
   return { techs, saisiesParTech };
 }
 async function chargerMesTechniciens(caId) {
@@ -401,10 +427,16 @@ async function chargerTousTechniciens() {
   const snap = await getDocs(q);
   return snap.docs.map(d => ({ uid: d.id, ...d.data() }));
 }
-async function sauvegarderSaisie(techId, data, mission) {
+async function sauvegarderSaisie(techId, data, userSnapshot) {
+  // Capture l'état du technicien AU MOMENT de la saisie (mission/CA/fournisseur) :
+  // ces attributs peuvent changer après coup côté utilisateurs, mais les rapports
+  // historiques (récaps hebdo, VueHistorique) doivent rester fidèles à la situation
+  // réelle du jour saisi, pas à la situation actuelle du technicien.
   await setDoc(doc(db, "saisies", `${techId}_${getDateKey()}`), {
     ...data, tech_id: techId, date: getDateKey(), semaine: getSemaineKey(),
-    mission_au_moment_saisie: mission,
+    mission_au_moment_saisie: userSnapshot?.mission,
+    charge_id_au_moment_saisie: userSnapshot?.charge_id,
+    fournisseur_au_moment_saisie: userSnapshot?.fournisseur,
     timestamp: new Date().toISOString(),
   });
 }
@@ -915,7 +947,7 @@ const VueSaisie = ({ user }) => {
     if (dejaModifie) return;
     setStatut("saving");
     try {
-      await sauvegarderSaisie(user.uid, { ...form, modifie: !!form.tech_id }, user.mission);
+      await sauvegarderSaisie(user.uid, { ...form, modifie: !!form.tech_id }, user);
       setStatut("saved");
       if (form.tech_id) setDejaModifie(true);
     } catch { setStatut("error"); }
@@ -1454,7 +1486,9 @@ const VueDashboard = ({ user, onVoirProfil }) => {
                               color: saisie ? (ci === 0 ? mission?.couleur : T.inkMid) : T.border,
                               fontFamily: "'Fira Code', monospace",
                             }}>
-                              {saisie ? (saisie[champ.key] ?? 0) : "—"}
+                              {/* champ.key absent de la saisie (ex: mission changée après coup) → "—",
+                                  pas 0, pour ne pas laisser croire à une valeur nulle saisie */}
+                              {saisie ? (champ.key in saisie ? saisie[champ.key] : "—") : "—"}
                             </span>
                           </td>
                         ))}
@@ -1562,7 +1596,22 @@ const VueDashboard = ({ user, onVoirProfil }) => {
       {/* Modal détail complet des totaux semaine — TOUS les champs de la mission */}
       {detailTech && (() => {
         const missionDetail = MISSIONS[detailTech.mission];
-        const champsNum = missionDetail?.champs.filter(c => c.type === "number") || [];
+        // Union des champs numériques de toutes les missions effectivement utilisées
+        // cette semaine (saisie.mission_au_moment_saisie, fallback mission actuelle)
+        const saisiesDetail = Object.values(saisiesSemaine[detailTech.uid] || {});
+        const missionsUtiliseesMap = new Map();
+        saisiesDetail.forEach(s => {
+          const mKey = s.mission_au_moment_saisie || detailTech.mission;
+          if (!missionsUtiliseesMap.has(mKey)) missionsUtiliseesMap.set(mKey, MISSIONS[mKey]);
+        });
+        if (missionsUtiliseesMap.size === 0) missionsUtiliseesMap.set(detailTech.mission, missionDetail);
+        const champsNumMap = new Map();
+        missionsUtiliseesMap.forEach(m => {
+          (m?.champs || []).filter(c => c.type === "number").forEach(c => {
+            if (!champsNumMap.has(c.key)) champsNumMap.set(c.key, c);
+          });
+        });
+        const champsNum = Array.from(champsNumMap.values());
         const totauxDetail = calcTotauxSemaine(detailTech.uid);
         const nbJoursDetail = totauxDetail.nb_jours || 0;
         const completDetail = nbJoursDetail >= joursEcoulesSemaine;
@@ -1888,7 +1937,6 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
   const [saisiesSem, setSaisiesSem] = useState({});
   const [loading, setLoading] = useState(true);
   const jourActuel = getJourActuel();
-  const champPrincipal = mission?.champs.find(c => ["cpt_dn15_20", "cpt_releves", "ctrl_vente_inf10"].includes(c.key));
 
   useEffect(() => {
     chargerSaisiesSemaine(tech.uid).then(d => { setSaisiesSem(d); setLoading(false); });
@@ -1929,6 +1977,12 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
           <div className="stagger" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
             {JOURS.slice(0, 5).map((jour, idx) => {
               const saisie = saisiesSem[getDateDuJour(idx)];
+              // Le champ "principal" affiché dépend de la mission AU MOMENT de CETTE
+              // saisie (et non de la mission actuelle du technicien, qui a pu changer
+              // depuis) : un changement de mission en cours de semaine ne doit pas
+              // afficher 0 pour des jours saisis sous l'ancienne mission.
+              const missionJour = saisie ? (MISSIONS[saisie.mission_au_moment_saisie || tech.mission] || mission) : mission;
+              const champPrincipalJour = missionJour?.champs.find(c => ["cpt_dn15_20", "cpt_releves", "ctrl_vente_inf10"].includes(c.key));
               return (
                 <div key={jour} style={{
                   background: T.surface, borderRadius: 10,
@@ -1937,12 +1991,12 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
                 }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: T.inkMuted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>{jour.slice(0, 3)}</div>
                   <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}><Voyant saisi={!!saisie} /></div>
-                  {saisie && champPrincipal ? (
+                  {saisie && champPrincipalJour ? (
                     <>
                       <div style={{ fontSize: 20, fontWeight: 700, color: T.ink, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 3 }}>
-                        {saisie[champPrincipal.key] || 0}
+                        {saisie[champPrincipalJour.key] || 0}
                       </div>
-                      <div style={{ fontSize: 9, color: T.inkMuted }}>{champPrincipal.label}</div>
+                      <div style={{ fontSize: 9, color: T.inkMuted }}>{champPrincipalJour.label}</div>
                     </>
                   ) : !saisie && (
                     <div style={{ fontSize: 11, color: T.border }}>—</div>
@@ -1960,7 +2014,10 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
                 Aucune saisie aujourd'hui.
               </div>
             );
-            const champsNum = mission?.champs.filter(c => c.type === "number") || [];
+            // Mission AU MOMENT de cette saisie précise (fallback mission actuelle pour
+            // les anciennes saisies sans le champ).
+            const missionSaisieJour = MISSIONS[saisieJour.mission_au_moment_saisie || tech.mission] || mission;
+            const champsNum = missionSaisieJour?.champs.filter(c => c.type === "number") || [];
             return (
               <Card animate style={{ marginTop: 16 }}>
                 <div style={{ padding: "14px 20px", borderBottom: `1px solid ${T.border}` }}>
@@ -1973,7 +2030,7 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
                       borderRight: (i + 1) % 4 !== 0 ? `1px solid ${T.border}` : "none",
                       borderBottom: i < champsNum.length - 4 ? `1px solid ${T.border}` : "none",
                     }}>
-                      <div style={{ fontSize: 26, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 5 }}>
+                      <div style={{ fontSize: 26, fontWeight: 700, color: missionSaisieJour?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 5 }}>
                         {saisieJour[champ.key] ?? 0}
                       </div>
                       <div style={{ fontSize: 10, color: T.inkSub, fontWeight: 500, lineHeight: 1.3 }}>{champ.label}</div>

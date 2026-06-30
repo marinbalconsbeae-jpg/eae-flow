@@ -268,6 +268,20 @@ CHAMPS_PAR_MISSION = {
     "Controle_ANC":       ["anc_controles", "anc_conformes", "anc_non_conformes"],
 }
 
+def _union_champs_missions(missions):
+    """Union ordonnée et dédupliquée des champs CHAMPS_PAR_MISSION pour un ensemble de
+    missions. Utilisée quand un technicien a changé de mission en cours de semaine : on
+    veut afficher les champs de TOUTES les missions réellement rencontrées, pas seulement
+    de sa mission actuelle, pour ne perdre aucune donnée déjà calculée."""
+    vus = set()
+    champs = []
+    for m in missions:
+        for k in CHAMPS_PAR_MISSION.get(m, []):
+            if k not in vus:
+                vus.add(k)
+                champs.append(k)
+    return champs
+
 # ─── TÂCHE 1 : RAPPEL 20H AUX TECHNICIENS ────────────────────────────────────
 def tache_rappel_techniciens():
     """Envoie un rappel aux techniciens qui n'ont pas saisi leur journée."""
@@ -320,7 +334,9 @@ def generer_analyse_claude(ca, mes_techs, saisies_jour, non_saisis_ids):
         lignes = []
         for tech in mes_techs:
             saisie = next((s for s in saisies_jour if s["tech_id"] == tech["uid"]), None)
-            mission = tech["mission"].replace("_", " ")
+            # Mission au moment de CETTE saisie (fallback mission actuelle) — évite de
+            # mal libeller un technicien dont la mission a changé après sa saisie du matin.
+            mission = ((saisie.get("mission_au_moment_saisie") if saisie else None) or tech["mission"]).replace("_", " ")
             if saisie:
                 champs = {
                     "Heures": saisie.get("total_heures"),
@@ -374,7 +390,12 @@ def generer_analyse_claude_semaine(ca, mes_techs, totaux, semaine):
             total = totaux.get(tech["uid"], {})
             nb_jours = total.get("nb_jours", 0)
             mission = tech["mission"].replace("_", " ")
-            champs = CHAMPS_PAR_MISSION.get(tech["mission"], [])
+            # Union des champs des missions effectivement rencontrées dans la semaine
+            # (total["missions_semaine"], calculé par _calculer_totaux_pour_saisies) —
+            # pas seulement la mission actuelle, pour ne pas faire dire à Claude qu'un
+            # technicien "n'a presque rien fait" alors qu'il a travaillé sous une autre
+            # mission avant d'être réaffecté en cours de semaine.
+            champs = _union_champs_missions(total.get("missions_semaine") or [tech["mission"]])
             stats = ", ".join(
                 f"{LABELS_CHAMPS.get(k, k)}: {total.get(k, 0)}"
                 for k in champs if total.get(k) is not None
@@ -420,7 +441,17 @@ def tache_recap_journalier():
     non_saisis_ids = {t["uid"] for t in non_saisis}
 
     for ca in charges:
-        mes_techs = [t for t in techniciens if t["charge_id"] == ca["id"]]
+        # Un technicien dépend de ce CA aujourd'hui si sa saisie du jour porte
+        # charge_id_au_moment_saisie == ca["id"] (capturé à l'écriture) ; à défaut
+        # (pas de saisie aujourd'hui, ou saisie antérieure à ce champ), on retombe
+        # sur son charge_id ACTUEL — un transfert de CA en cours de journée avant
+        # 20h30 ne doit pas faire disparaître/réapparaître le technicien à tort.
+        mes_techs = []
+        for t in techniciens:
+            saisie_t = next((s for s in saisies_jour if s["tech_id"] == t["uid"]), None)
+            ca_du_jour = (saisie_t.get("charge_id_au_moment_saisie") if saisie_t else None) or t.get("charge_id")
+            if ca_du_jour == ca["id"]:
+                mes_techs.append(t)
         if not mes_techs:
             continue
 
@@ -430,16 +461,20 @@ def tache_recap_journalier():
             saisie = next((s for s in saisies_jour if s["tech_id"] == tech["uid"]), None)
             statut_couleur = "#16A34A" if saisie else "#DC2626"
             statut_texte = "Saisi" if saisie else "Non saisi"
+            # Mission AU MOMENT de cette saisie précise (fallback mission actuelle) — un
+            # changement de mission après la saisie du matin ne doit pas faire chercher
+            # les mauvais champs dans les données réellement saisies.
+            mission_du_jour = (saisie.get("mission_au_moment_saisie") if saisie else None) or tech.get("mission", "")
 
             if saisie:
-                stats = _formater_stats_mission(saisie, tech.get("mission", ""))
+                stats = _formater_stats_mission(saisie, mission_du_jour)
             else:
                 stats = "<em style='color:#999'>—</em>"
 
             lignes_html += f"""
             <tr style="border-bottom: 1px solid #f0f0f0; background: {'#fff' if saisie else '#fff5f5'};">
                 <td style="padding: 10px 16px; font-weight: 600;">{tech['prenom']} {tech['nom']}</td>
-                <td style="padding: 10px 16px; color: #666; font-size: 13px;">{tech['mission'].replace('_', ' ')}</td>
+                <td style="padding: 10px 16px; color: #666; font-size: 13px;">{mission_du_jour.replace('_', ' ')}</td>
                 <td style="padding: 10px 16px; font-size: 13px;">{stats}</td>
                 <td style="padding: 10px 16px; text-align: center;">
                     <span style="background: {statut_couleur}20; color: {statut_couleur}; padding: 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600;">
@@ -514,10 +549,18 @@ def _formater_stats_mission(saisie, mission):
     return html
 
 # ─── UTILITAIRE FORMATAGE TOTAUX HEBDO ───────────────────────────────────────
-def _formater_totaux_mission(total, mission):
-    """Formate les totaux hebdomadaires d'un technicien selon sa mission."""
+def _formater_totaux_mission(total, mission_fallback):
+    """Formate les totaux hebdomadaires d'un technicien.
+
+    Utilise l'union des champs de TOUTES les missions effectivement rencontrées dans
+    la semaine (total["missions_semaine"], calculé par _calculer_totaux_pour_saisies) :
+    si le technicien a changé de mission en cours de semaine, les totaux de l'ancienne
+    mission (réellement calculés dans `total`) restent affichés au lieu d'être masqués
+    par un filtrage sur la seule mission actuelle. À défaut (pas de saisie cette semaine,
+    ou anciennes saisies sans le champ), retombe sur mission_fallback (mission actuelle).
+    """
+    champs = _union_champs_missions(total.get("missions_semaine") or [mission_fallback])
     parts = []
-    champs = CHAMPS_PAR_MISSION.get(mission, [])
     for key in champs:
         val = total.get(key)
         if val is not None:
@@ -540,12 +583,37 @@ def tache_recap_hebdo_ca():
     semaine = get_semaine_courante()
     annee = get_annee_courante()
 
-    totaux = _calculer_totaux_semaine(techniciens, saisies_sem)
+    techs_par_uid = {t["uid"]: t for t in techniciens}
 
     for ca in charges:
-        mes_techs = [t for t in techniciens if t.get("charge_id") == ca["id"]]
-        if not mes_techs:
+        # Chaque SAISIE de la semaine est attribuée au CA en vigueur AU MOMENT où elle a
+        # été faite (charge_id_au_moment_saisie), avec repli sur le charge_id ACTUEL du
+        # technicien pour les saisies antérieures à ce champ. Un technicien transféré
+        # vers un autre CA en cours de semaine apparaît donc, chez chaque CA, avec
+        # uniquement les jours où il dépendait réellement de lui — pas la semaine
+        # entière chez le nouveau CA et zéro chez l'ancien.
+        saisies_ca_par_tech = {}
+        for s in saisies_sem:
+            tech = techs_par_uid.get(s["tech_id"])
+            if not tech:
+                continue  # technicien supprimé entre-temps
+            ca_saisie = s.get("charge_id_au_moment_saisie") or tech.get("charge_id")
+            if ca_saisie == ca["id"]:
+                saisies_ca_par_tech.setdefault(s["tech_id"], []).append(s)
+
+        # Techniciens à afficher : ceux actuellement rattachés à ce CA (même sans saisie
+        # cette semaine, pour qu'ils apparaissent à 0/5) + ceux dont au moins une saisie
+        # de la semaine lui est attribuée (transférés depuis, mais dont les jours
+        # antérieurs au transfert restent visibles ici).
+        uids_actuels = {t["uid"] for t in techniciens if t.get("charge_id") == ca["id"]}
+        uids_a_afficher = uids_actuels | set(saisies_ca_par_tech.keys())
+        if not uids_a_afficher:
             continue
+        mes_techs = [techs_par_uid[uid] for uid in uids_a_afficher if uid in techs_par_uid]
+        totaux = {
+            uid: _calculer_totaux_pour_saisies(techs_par_uid[uid], saisies_ca_par_tech.get(uid, []))
+            for uid in uids_a_afficher if uid in techs_par_uid
+        }
 
         # Grouper par mission
         missions_map = {}
@@ -644,7 +712,7 @@ def tache_recap_hebdo_fournisseur():
     semaine = get_semaine_courante()
     annee = get_annee_courante()
 
-    totaux = _calculer_totaux_semaine(techniciens, saisies_sem)
+    techs_par_uid = {t["uid"]: t for t in techniciens}
 
     for four in fournisseurs:
         nom_four = four.get("nom", "")
@@ -654,10 +722,31 @@ def tache_recap_hebdo_fournisseur():
             continue
         # Comparaison insensible à la casse et aux espaces pour tolérer les saisies manuelles
         cle_four = nom_four.strip().casefold()
-        ses_techs = [t for t in techniciens if (t.get("fournisseur") or "").strip().casefold() == cle_four]
-        if not ses_techs:
+
+        # Même logique que pour les CA : chaque saisie est attribuée au fournisseur en
+        # vigueur AU MOMENT où elle a été faite (fournisseur_au_moment_saisie), avec
+        # repli sur le fournisseur ACTUEL du technicien pour les anciennes saisies sans
+        # ce champ. Un technicien réaffecté d'un fournisseur à un autre en cours de
+        # semaine n'est donc plus facturé/compté en double ou en l'absence de l'un d'eux.
+        saisies_four_par_tech = {}
+        for s in saisies_sem:
+            tech = techs_par_uid.get(s["tech_id"])
+            if not tech:
+                continue
+            four_saisie = (s.get("fournisseur_au_moment_saisie") or tech.get("fournisseur") or "").strip().casefold()
+            if four_saisie == cle_four:
+                saisies_four_par_tech.setdefault(s["tech_id"], []).append(s)
+
+        uids_actuels = {t["uid"] for t in techniciens if (t.get("fournisseur") or "").strip().casefold() == cle_four}
+        uids_a_afficher = uids_actuels | set(saisies_four_par_tech.keys())
+        if not uids_a_afficher:
             log.info(f"Aucun technicien pour le fournisseur '{nom_four}' — mail ignoré")
             continue
+        ses_techs = [techs_par_uid[uid] for uid in uids_a_afficher if uid in techs_par_uid]
+        totaux = {
+            uid: _calculer_totaux_pour_saisies(techs_par_uid[uid], saisies_four_par_tech.get(uid, []))
+            for uid in uids_a_afficher if uid in techs_par_uid
+        }
 
         lignes_html = ""
         for tech in ses_techs:
@@ -713,26 +802,34 @@ def tache_recap_hebdo_fournisseur():
 
     log.info("=== Récap hebdo fournisseurs terminé ===")
 
-def _calculer_totaux_semaine(techniciens, saisies_sem):
-    """Calcule les totaux hebdomadaires pour chaque technicien."""
-    totaux = {}
-    champs_numeriques = [
-        "total_heures", "paniers_midi", "paniers_soir", "rdv_jour",
-        "cpt_dn15_20", "cpt_dn_sup20", "rac", "clapets_fact", "clapets_non_fact",
-        "sr_laiton", "reducteurs", "mo_heures", "modules_poses", "modules_relances",
-        "cpt_non_faits", "depl_injustifies", "clients_absents",
-        "cpt_releves", "infructueux", "absents_pda",
-        "ctrl_vente_inf10", "ctrl_vente_sup10", "ctrl_contrat_inf10", "ctrl_contrat_sup10",
-    ]
+CHAMPS_NUMERIQUES = [
+    "total_heures", "paniers_midi", "paniers_soir", "rdv_jour",
+    "cpt_dn15_20", "cpt_dn_sup20", "rac", "clapets_fact", "clapets_non_fact",
+    "sr_laiton", "reducteurs", "mo_heures", "modules_poses", "modules_relances",
+    "cpt_non_faits", "depl_injustifies", "clients_absents",
+    "cpt_releves", "infructueux", "absents_pda",
+    "ctrl_vente_inf10", "ctrl_vente_sup10", "ctrl_contrat_inf10", "ctrl_contrat_sup10",
+]
 
-    for tech in techniciens:
-        mes_saisies = [s for s in saisies_sem if s["tech_id"] == tech["uid"]]
-        total = {"tech_id": tech["uid"], "nb_jours": len(mes_saisies)}
-        for champ in champs_numeriques:
-            total[champ] = sum(s.get(champ, 0) or 0 for s in mes_saisies)
-        totaux[tech["uid"]] = total
+def _calculer_totaux_pour_saisies(tech, saisies_tech):
+    """Calcule les totaux hebdomadaires d'un technicien à partir d'un sous-ensemble de
+    saisies déjà filtré (ex: uniquement les jours où il dépendait d'un CA ou d'un
+    fournisseur donné — voir tache_recap_hebdo_ca/fournisseur).
 
-    return totaux
+    Calcule aussi missions_semaine : l'ensemble des missions effectivement rencontrées
+    dans ces saisies (mission_au_moment_saisie, fallback mission actuelle du technicien
+    pour les anciennes saisies sans ce champ) — consommé par _formater_totaux_mission
+    pour ne perdre aucun champ si la mission a changé en cours de semaine.
+    """
+    total = {"tech_id": tech["uid"], "nb_jours": len(saisies_tech)}
+    for champ in CHAMPS_NUMERIQUES:
+        total[champ] = sum(s.get(champ, 0) or 0 for s in saisies_tech)
+    missions = {s.get("mission_au_moment_saisie") or tech.get("mission", "") for s in saisies_tech}
+    missions.discard("")
+    if not missions and tech.get("mission"):
+        missions.add(tech["mission"])
+    total["missions_semaine"] = sorted(missions)
+    return total
 
 
 # ─── PLANIFICATEUR ────────────────────────────────────────────────────────────
