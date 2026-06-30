@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp, deleteApp } from "firebase/app";
-import { getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, updateDoc, query, where } from "firebase/firestore";
+import { getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, updateDoc, deleteField, query, where } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, createUserWithEmailAndPassword, setPersistence, browserSessionPersistence, verifyBeforeUpdateEmail } from "firebase/auth";
 
 // ─── FIREBASE ─────────────────────────────────────────────────────────────────
@@ -444,6 +444,19 @@ async function modifierMonEmail(uid, newEmail) {
   }
   // 2) Firestore : email utilisé par les dashboards et les emails de récap de l'agent
   await updateDoc(doc(db, "utilisateurs", uid), { email: newEmail });
+}
+
+// Marque un technicien absent jusqu'à dateRetour (string ISO "YYYY-MM-DD" incluse)
+async function marquerAbsentTechnicien(uid, dateRetour) {
+  await updateDoc(doc(db, "utilisateurs", uid), { absent_jusqu_au: dateRetour });
+}
+// Retire l'absence (le technicien redevient "présent")
+async function marquerPresentTechnicien(uid) {
+  await updateDoc(doc(db, "utilisateurs", uid), { absent_jusqu_au: deleteField() });
+}
+// Un technicien est considéré absent si absent_jusqu_au >= aujourd'hui (comparaison de strings ISO, valide)
+function estAbsentAujourdhui(tech) {
+  return !!tech.absent_jusqu_au && tech.absent_jusqu_au >= getDateKey();
 }
 
 const FOURNISSEURS = ["Iléo", "CUA", "Véolia", "Suez", "SEPIG", "Autre"];
@@ -1069,7 +1082,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
   const [openComment, setOpenComment] = useState(null);
   const parMission = techniciens.reduce((acc, t) => { if (!acc[t.mission]) acc[t.mission] = []; acc[t.mission].push(t); return acc; }, {});
   const autresTech = recherche.length > 1 ? tousTechs.filter(t => t.charge_id !== user.uid && (`${t.nom} ${t.prenom}`).toLowerCase().includes(recherche.toLowerCase())) : [];
-  const nbNonSaisi = techniciens.filter(t => !saisiesJour[t.uid]).length;
+  const nbNonSaisi = techniciens.filter(t => !saisiesJour[t.uid] && !estAbsentAujourdhui(t)).length;
   const nbSaisi = techniciens.length - nbNonSaisi;
 
   if (loading) return <Spinner />;
@@ -1208,11 +1221,12 @@ const VueDashboard = ({ user, onVoirProfil }) => {
                 <tbody>
                   {techs.map((tech, i) => {
                     const saisie = saisiesJour[tech.uid];
+                    const absent = estAbsentAujourdhui(tech);
                     return (
                       <>
                       <tr key={tech.uid} className="table-row" style={{
                         borderBottom: openComment === tech.uid ? "none" : (i < techs.length - 1 ? `1px solid ${T.border}` : "none"),
-                        background: !saisie ? "#FFFBFB" : T.surface,
+                        background: absent ? T.amberLight : (!saisie ? "#FFFBFB" : T.surface),
                       }}>
                         <td style={{ padding: "13px 16px" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1240,10 +1254,18 @@ const VueDashboard = ({ user, onVoirProfil }) => {
                         ))}
                         <td style={{ padding: "13px 16px" }}>
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
-                            <Voyant saisi={!!saisie} />
-                            <span style={{ fontSize: 12, fontWeight: 500, color: saisie ? T.green : T.red }}>
-                              {saisie ? "Saisi" : "Non saisi"}
-                            </span>
+                            {absent ? (
+                              <span style={{ background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A", borderRadius: 6, padding: "2px 9px", fontSize: 11, fontWeight: 700 }}>
+                                Absent jusqu'au {new Date(tech.absent_jusqu_au + "T00:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
+                              </span>
+                            ) : (
+                              <>
+                                <Voyant saisi={!!saisie} />
+                                <span style={{ fontSize: 12, fontWeight: 500, color: saisie ? T.green : T.red }}>
+                                  {saisie ? "Saisi" : "Non saisi"}
+                                </span>
+                              </>
+                            )}
                             {saisie?.commentaires && (
                               <button
                                 onClick={() => setOpenComment(openComment === tech.uid ? null : tech.uid)}
@@ -1356,6 +1378,9 @@ const VueGestion = ({ user }) => {
   const [editUid, setEditUid] = useState(null);
   const [editForm, setEditForm] = useState({ mission: "", fournisseur: "", email: "" });
   const [savingEdit, setSavingEdit] = useState(false);
+  const [absenceUid, setAbsenceUid] = useState(null);
+  const [dateRetour, setDateRetour] = useState("");
+  const [savingAbsence, setSavingAbsence] = useState(false);
 
   const recharger = () => chargerMesTechniciens(user.uid).then(t => { setTechniciens(t); setLoading(false); });
   useEffect(() => {
@@ -1500,12 +1525,21 @@ const VueGestion = ({ user }) => {
                   );
                 }
 
+                const absent = estAbsentAujourdhui(tech);
+
                 return (
                   <tr key={tech.uid} className="table-row" style={borderStyle}>
                     <td style={{ padding: "13px 16px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <Avatar prenom={tech.prenom} nom={tech.nom} couleur={mission?.couleur || T.inkSub} size={32} />
-                        <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{tech.prenom} {tech.nom}</span>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{tech.prenom} {tech.nom}</div>
+                          {absent && (
+                            <span style={{ fontSize: 11, fontWeight: 600, color: T.amber }}>
+                              Absent jusqu'au {new Date(tech.absent_jusqu_au + "T00:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td style={{ padding: "13px 16px", textAlign: "center" }}>
@@ -1526,15 +1560,50 @@ const VueGestion = ({ user }) => {
                           }}>Confirmer</Btn>
                           <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px" }} onClick={() => setConfirmSuppr(null)}>Annuler</Btn>
                         </div>
+                      ) : absenceUid === tech.uid ? (
+                        <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center" }}>
+                          <input type="date" className="field-input" value={dateRetour} min={getDateKey()}
+                            onChange={e => setDateRetour(e.target.value)}
+                            style={{ fontSize: 12, padding: "5px 8px", width: 134 }} />
+                          <Btn loading={savingAbsence} style={{ fontSize: 11, padding: "4px 10px" }} onClick={async () => {
+                            if (!dateRetour) { setErreur("Choisis une date de retour."); return; }
+                            setSavingAbsence(true); setErreur("");
+                            try {
+                              await marquerAbsentTechnicien(tech.uid, dateRetour);
+                              setSucces(`${tech.prenom} ${tech.nom} marqué absent jusqu'au ${new Date(dateRetour + "T00:00:00").toLocaleDateString("fr-FR")}.`);
+                              setAbsenceUid(null); setDateRetour("");
+                              recharger();
+                            } catch { setErreur("Erreur lors du marquage d'absence."); }
+                            finally { setSavingAbsence(false); }
+                          }}>Confirmer</Btn>
+                          <Btn variant="secondary" style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => { setAbsenceUid(null); setDateRetour(""); }}>Annuler</Btn>
+                        </div>
                       ) : (
-                        <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                        <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
                           <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.blue }} onClick={() => {
                             setEditUid(tech.uid);
                             setEditForm({ mission: tech.mission, fournisseur: tech.fournisseur, email: tech.email || "" });
+                            setAbsenceUid(null);
                             setConfirmSuppr(null);
                             setSucces(""); setErreur("");
                           }}>Modifier</Btn>
-                          <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.red }} onClick={() => { setConfirmSuppr(tech.uid); setEditUid(null); }}>Supprimer</Btn>
+                          {absent ? (
+                            <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.amber }} onClick={async () => {
+                              setErreur(""); setSucces("");
+                              try {
+                                await marquerPresentTechnicien(tech.uid);
+                                setSucces(`${tech.prenom} ${tech.nom} marqué présent.`);
+                                recharger();
+                              } catch { setErreur("Erreur lors du marquage de présence."); }
+                            }}>Marquer présent</Btn>
+                          ) : (
+                            <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.amber }} onClick={() => {
+                              setAbsenceUid(tech.uid); setDateRetour("");
+                              setEditUid(null); setConfirmSuppr(null);
+                              setSucces(""); setErreur("");
+                            }}>Marquer absent</Btn>
+                          )}
+                          <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.red }} onClick={() => { setConfirmSuppr(tech.uid); setEditUid(null); setAbsenceUid(null); }}>Supprimer</Btn>
                         </div>
                       )}
                     </td>

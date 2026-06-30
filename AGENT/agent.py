@@ -118,11 +118,24 @@ def get_annee_courante():
 def est_vendredi():
     return date.today().weekday() == 4
 
+def est_absent(tech, aujourd_hui=None):
+    """True si le technicien est marqué absent jusqu'à une date >= aujourd'hui.
+
+    absent_jusqu_au est une string ISO "YYYY-MM-DD" écrite par l'appli web
+    (VueGestion) ; la comparaison lexicographique de strings ISO est valide.
+    """
+    aujourd_hui = aujourd_hui or get_date_aujourdhui()
+    absent_jusqu_au = tech.get("absent_jusqu_au")
+    return bool(absent_jusqu_au) and absent_jusqu_au >= aujourd_hui
+
 def techniciens_non_saisis(techniciens, saisies):
-    """Retourne la liste des techniciens qui n'ont pas saisi aujourd'hui."""
+    """Retourne les techniciens qui n'ont pas saisi aujourd'hui, hors absents."""
     aujourd_hui = get_date_aujourdhui()
     ids_saisis = {s["tech_id"] for s in saisies if s["date"] == aujourd_hui}
-    return [t for t in techniciens if t["uid"] not in ids_saisis]
+    return [
+        t for t in techniciens
+        if t["uid"] not in ids_saisis and not est_absent(t, aujourd_hui)
+    ]
 
 def saisies_du_jour(saisies):
     raise NotImplementedError("saisies_du_jour() supprimée — utiliser charger_saisies_du_jour() depuis firebase_client.")
@@ -264,10 +277,15 @@ def tache_rappel_techniciens():
     techniciens = charger_techniciens()
     saisies = charger_saisies_du_jour()
 
+    absents = [t for t in techniciens if est_absent(t)]
+    if absents:
+        log.info(f"{len(absents)} technicien(s) absent(s) exclu(s) des rappels : {[t['nom'] for t in absents]}")
+
+    # techniciens_non_saisis() exclut déjà les absents (voir est_absent())
     non_saisis = techniciens_non_saisis(techniciens, saisies)
 
     if not non_saisis:
-        log.info("Tous les techniciens ont saisi leur journée. Aucun rappel nécessaire.")
+        log.info("Tous les techniciens ont saisi leur journée (ou sont absents). Aucun rappel nécessaire.")
         return
 
     log.info(f"{len(non_saisis)} technicien(s) sans saisie : {[t['nom'] for t in non_saisis]}")
