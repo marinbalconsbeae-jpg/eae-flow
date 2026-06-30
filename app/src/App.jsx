@@ -823,7 +823,7 @@ const Header = ({ user, onLogout, page, onChangePage }) => {
   const mission = isTech && user.mission ? MISSIONS[user.mission] : null;
 
   const navItems = isTech
-    ? [{ id: "saisie", label: "Saisie du jour" }, { id: "mon_suivi", label: "Mon suivi" }, { id: "historique", label: "Historique" }]
+    ? [{ id: "saisie", label: "Saisie du jour" }, { id: "historique", label: "Historique" }]
     : [{ id: "dashboard", label: "Dashboard" }, { id: "historique", label: "Historique" }, { id: "gestion", label: "Mes techniciens" }, { id: "fournisseurs", label: "Fournisseurs" }];
 
   return (
@@ -998,89 +998,6 @@ const VueSaisie = ({ user }) => {
   );
 };
 
-// ─── VUE MON SUIVI ────────────────────────────────────────────────────────────
-const VueMonSuivi = ({ user }) => {
-  const mission = MISSIONS[user.mission];
-  const jourActuel = getJourActuel();
-  const [saisiesSem, setSaisiesSem] = useState({});
-  const [loading, setLoading] = useState(true);
-  const champKeys = CHAMPS_PAR_MISSION[user.mission] || mission?.champs.filter(c => c.type === "number").slice(0, 3).map(c => c.key) || [];
-  const champsPrincipaux = champKeys.map(k => mission?.champs.find(c => c.key === k)).filter(Boolean);
-
-  useEffect(() => {
-    chargerSaisiesSemaine(user.uid).then(d => { setSaisiesSem(d); setLoading(false); });
-  }, []);
-
-  if (loading) return <Spinner />;
-
-  return (
-    <div style={{ padding: "28px 24px", maxWidth: 720, margin: "0 auto" }}>
-      <div style={{ marginBottom: 24, animation: `fadeUp 250ms ${T.easeOut} both` }}>
-        <h1 style={{ fontSize: 20, fontWeight: 700, color: T.ink, letterSpacing: "-0.02em", marginBottom: 4 }}>Mon suivi</h1>
-        <p style={{ color: T.inkSub, fontSize: 13 }}>Semaine S{getNumeroSemaine()} · {new Date().getFullYear()}</p>
-      </div>
-
-      {/* Grille jours — stagger */}
-      <div className="stagger" style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, marginBottom: 20 }}>
-        {JOURS.map((jour, idx) => {
-          const saisie = saisiesSem[getDateDuJour(idx)];
-          const estAujourdHui = idx === jourActuel;
-          const estFutur = idx > jourActuel;
-          return (
-            <div key={jour} style={{
-              background: T.surface,
-              borderRadius: 10,
-              border: estAujourdHui ? `2px solid ${T.blue}` : `1px solid ${T.border}`,
-              padding: "14px 8px",
-              textAlign: "center",
-              opacity: estFutur ? 0.35 : 1,
-              transition: `border-color 200ms ${T.easeOut}`,
-            }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: T.inkMuted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
-                {jour.slice(0, 3)}
-              </div>
-              <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
-                <Voyant saisi={!!saisie} size={9} />
-              </div>
-              {saisie && champsPrincipaux[0] && (
-                <>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: T.ink, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 3 }}>
-                    {saisie[champsPrincipaux[0].key] || 0}
-                  </div>
-                  <div style={{ fontSize: 9, color: T.inkMuted, lineHeight: 1.3 }}>{champsPrincipaux[0].label}</div>
-                </>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Totaux */}
-      <Card animate style={{ marginBottom: 16 }}>
-        <div style={{ padding: "18px 20px", borderBottom: `1px solid ${T.border}` }}>
-          <SectionLabel>Totaux semaine</SectionLabel>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: `repeat(${champsPrincipaux.length || 1}, 1fr)`, gap: 0 }}>
-          {champsPrincipaux.map((champ, i) => {
-            const total = JOURS.reduce((acc, _, idx) => acc + ((saisiesSem[getDateDuJour(idx)]?.[champ.key]) || 0), 0);
-            return (
-              <div key={champ.key} style={{
-                padding: "20px 16px", textAlign: "center",
-                borderRight: i < champsPrincipaux.length - 1 ? `1px solid ${T.border}` : "none",
-              }}>
-                <div style={{ fontSize: 34, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 6 }}>
-                  {total}
-                </div>
-                <div style={{ fontSize: 11, color: T.inkSub, fontWeight: 500 }}>{champ.label}</div>
-              </div>
-            );
-          })}
-        </div>
-      </Card>
-    </div>
-  );
-};
-
 // ─── VUE HISTORIQUE TECHNICIEN ────────────────────────────────────────────────
 // Symétrique de VueHistorique (CA) : sélecteur de semaine + détail jour par jour
 // pour le technicien connecté, réutilisant Card / Badge / Voyant.
@@ -1159,6 +1076,28 @@ const VueHistoriqueTech = ({ user }) => {
             </div>
           </div>
 
+          {/* Totaux semaine */}
+          {champs4.length > 0 && (
+            <Card animate style={{ marginBottom: 16 }}>
+              <div style={{ padding: "18px 20px", borderBottom: `1px solid ${T.border}` }}>
+                <SectionLabel>Totaux semaine</SectionLabel>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: `repeat(${champs4.length}, 1fr)`, gap: 0 }}>
+                {champs4.map((champ, i) => (
+                  <div key={champ.key} style={{
+                    padding: "20px 16px", textAlign: "center",
+                    borderRight: i < champs4.length - 1 ? `1px solid ${T.border}` : "none",
+                  }}>
+                    <div style={{ fontSize: 34, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 6 }}>
+                      {totaux[champ.key] || 0}
+                    </div>
+                    <div style={{ fontSize: 11, color: T.inkSub, fontWeight: 500 }}>{champ.label}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
           <Card style={{ marginBottom: 24 }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
@@ -1221,28 +1160,6 @@ const VueHistoriqueTech = ({ user }) => {
               </tbody>
             </table>
           </Card>
-
-          {/* Totaux semaine */}
-          {champs4.length > 0 && (
-            <Card animate>
-              <div style={{ padding: "18px 20px", borderBottom: `1px solid ${T.border}` }}>
-                <SectionLabel>Totaux semaine</SectionLabel>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: `repeat(${champs4.length}, 1fr)`, gap: 0 }}>
-                {champs4.map((champ, i) => (
-                  <div key={champ.key} style={{
-                    padding: "20px 16px", textAlign: "center",
-                    borderRight: i < champs4.length - 1 ? `1px solid ${T.border}` : "none",
-                  }}>
-                    <div style={{ fontSize: 34, fontWeight: 700, color: mission?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 6 }}>
-                      {totaux[champ.key] || 0}
-                    </div>
-                    <div style={{ fontSize: 11, color: T.inkSub, fontWeight: 500 }}>{champ.label}</div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
         </>
       )}
 
@@ -2597,7 +2514,6 @@ export default function App() {
         <Header user={user} onLogout={handleLogout} page={page} onChangePage={handleChangePage} />
         <main>
           {page === "saisie" && <VueSaisie user={user} />}
-          {page === "mon_suivi" && <VueMonSuivi user={user} />}
           {page === "dashboard" && <VueDashboard user={user} onVoirProfil={t => { setProfilTech(t); setPage("profil"); }} />}
           {page === "historique" && (user.role === "technicien" ? <VueHistoriqueTech user={user} /> : <VueHistorique user={user} />)}
 
