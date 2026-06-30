@@ -1328,7 +1328,15 @@ const VueDashboard = ({ user, onVoirProfil }) => {
   return (
     <div style={{ padding: "28px 24px" }}>
       {/* En-tête */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, animation: `fadeUp 250ms ${T.easeOut} both` }}>
+      {/* Pas de fill-mode "both" ici : avec "both", le fadeUp se fige sur transform:translateY(0)
+          en permanence (fill-mode conserve la valeur du dernier keyframe), ce qui crée un nouveau
+          stacking context sur ce conteneur. Le dropdown de recherche (position:absolute + z-index)
+          se retrouvait alors piégé À L'INTÉRIEUR de ce stacking context : son z-index ne comptait
+          que parmi les enfants de l'en-tête, jamais face à l'Alerte qui suit en dehors — d'où le
+          dropdown qui passait sous l'alerte malgré son z-index. Sans "both", l'animation rejoint
+          naturellement l'état non animé (opacity:1, transform:none) une fois finie : même rendu
+          visuel, mais plus de stacking context résiduel. */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, animation: `fadeUp 250ms ${T.easeOut}` }}>
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 700, color: T.ink, letterSpacing: "-0.02em", marginBottom: 4 }}>
             Dashboard <span style={{ color: T.inkMuted, fontWeight: 500 }}>— S{getNumeroSemaine()}</span>
@@ -1376,7 +1384,8 @@ const VueDashboard = ({ user, onVoirProfil }) => {
               position: "absolute", top: "calc(100% + 6px)", right: 0,
               background: T.surface, border: `1px solid ${T.border}`,
               borderRadius: 12, boxShadow: "0 12px 32px rgba(0,0,0,0.12)",
-              zIndex: 50, width: 320, padding: 8,
+              zIndex: 200, width: 320, padding: 8,
+              maxHeight: "min(420px, 70vh)", overflowY: "auto",
               animation: `slideDown 180ms ${T.easeOut} both`,
             }}>
               <div style={{ fontSize: 10, color: T.inkMuted, padding: "4px 10px 8px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
