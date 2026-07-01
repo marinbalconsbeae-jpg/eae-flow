@@ -538,6 +538,13 @@ async function chargerMissionsCustom(caId) {
   const snap = await getDocs(q);
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
+// Lit UNE mission personnalisée par son id — utilisé côté technicien, qui n'a pas le
+// droit de lister toutes les missions_custom d'un CA (règle scopée à ca_id == charge_id
+// du lecteur), mais peut lire ce document précis puisqu'il correspond à sa propre mission.
+async function chargerMissionCustomParId(missionId) {
+  const snap = await getDoc(doc(db, "missions_custom", missionId));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
 async function creerMissionCustom(caId, nom, couleur, champs) {
   const ref = doc(collection(db, "missions_custom"));
   await setDoc(ref, {
@@ -988,7 +995,8 @@ const Header = ({ user, onLogout, page, onChangePage, onLogoClick }) => {
 
 // ─── VUE SAISIE TECHNICIEN ────────────────────────────────────────────────────
 const VueSaisie = ({ user }) => {
-  const mission = getMissionData(user.mission, []);
+  const [missionCustomUnique, setMissionCustomUnique] = useState(null);
+  const mission = getMissionData(user.mission, missionCustomUnique ? [missionCustomUnique] : []);
   const jourIdx = getJourActuel();
   const [form, setForm] = useState({});
   const [statut, setStatut] = useState("loading");
@@ -1000,6 +1008,14 @@ const VueSaisie = ({ user }) => {
       setStatut("idle");
     }).catch(() => setStatut("idle"));
   }, []);
+
+  // Mission non statique => mission personnalisée du CA : le technicien n'a pas accès
+  // en lecture à toute la collection missions_custom, seulement à ce document précis.
+  useEffect(() => {
+    if (user.mission && !MISSIONS[user.mission]) {
+      chargerMissionCustomParId(user.mission).then(setMissionCustomUnique);
+    }
+  }, [user.mission]);
 
   const handleSubmit = async () => {
     if (dejaModifie) return;
@@ -1093,7 +1109,18 @@ const VueSaisie = ({ user }) => {
 // Symétrique de VueHistorique (CA) : sélecteur de semaine + détail jour par jour
 // pour le technicien connecté, réutilisant Card / Badge / Voyant.
 const VueHistoriqueTech = ({ user }) => {
-  const mission = getMissionData(user.mission, []);
+  const [missionCustomUnique, setMissionCustomUnique] = useState(null);
+  // Mission non statique => mission personnalisée du CA : le technicien n'a pas accès en
+  // lecture à toute la collection missions_custom, seulement à ce document précis (voir
+  // règle Firestore : ca_id du document == charge_id du lecteur).
+  useEffect(() => {
+    if (user.mission && !MISSIONS[user.mission]) {
+      chargerMissionCustomParId(user.mission).then(setMissionCustomUnique);
+    }
+  }, [user.mission]);
+  const missionsCustomDispo = missionCustomUnique ? [missionCustomUnique] : [];
+
+  const mission = getMissionData(user.mission, missionsCustomDispo);
   const [semOffset, setSemOffset] = useState(0);
   const [saisiesSem, setSaisiesSem] = useState({});
   const [loading, setLoading] = useState(true);
@@ -1110,7 +1137,7 @@ const VueHistoriqueTech = ({ user }) => {
   const missionsSemaineMap = new Map();
   Object.values(saisiesSem).forEach(s => {
     const mKey = s.mission_au_moment_saisie || user.mission;
-    if (!missionsSemaineMap.has(mKey)) missionsSemaineMap.set(mKey, getMissionData(mKey, []));
+    if (!missionsSemaineMap.has(mKey)) missionsSemaineMap.set(mKey, getMissionData(mKey, missionsCustomDispo));
   });
   if (missionsSemaineMap.size === 0) missionsSemaineMap.set(user.mission, mission);
   const champsTousNumMap = new Map();
@@ -1279,7 +1306,7 @@ const VueHistoriqueTech = ({ user }) => {
       {/* Modal détail complet d'une journée — TOUS les champs de la mission, pas seulement les 4 principaux */}
       {detailJour && (() => {
         // Mission au moment de CETTE saisie (fallback : mission actuelle pour les anciennes saisies sans le champ)
-        const missionJour = getMissionData(detailJour.saisie.mission_au_moment_saisie || user.mission, []);
+        const missionJour = getMissionData(detailJour.saisie.mission_au_moment_saisie || user.mission, missionsCustomDispo);
         const champsNum = missionJour?.champs.filter(c => c.type === "number") || [];
         return (
           <Modal maxWidth={460} onClose={() => setDetailJour(null)}>
@@ -1803,7 +1830,14 @@ const VueGestion = ({ user }) => {
               </Field>
               <Field label="Mission">
                 <select className="field-input" value={form.mission} onChange={e => setForm(p => ({ ...p, mission: e.target.value }))}>
-                  {Object.entries(MISSIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  <optgroup label="Missions">
+                    {Object.entries(MISSIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  </optgroup>
+                  {missionsCustom.length > 0 && (
+                    <optgroup label="Missions personnalisées">
+                      {missionsCustom.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                    </optgroup>
+                  )}
                 </select>
               </Field>
               <Field label="Fournisseur">
@@ -1856,7 +1890,14 @@ const VueGestion = ({ user }) => {
                         <select className="field-input" value={editForm.mission}
                           onChange={e => setEditForm(p => ({ ...p, mission: e.target.value }))}
                           style={{ fontSize: 12, padding: "6px 10px" }}>
-                          {Object.entries(MISSIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                          <optgroup label="Missions">
+                            {Object.entries(MISSIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                          </optgroup>
+                          {missionsCustom.length > 0 && (
+                            <optgroup label="Missions personnalisées">
+                              {missionsCustom.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                            </optgroup>
+                          )}
                         </select>
                       </td>
                       <td style={{ padding: "10px 16px" }}>

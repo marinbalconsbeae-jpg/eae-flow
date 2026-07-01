@@ -91,3 +91,17 @@ def charger_fournisseurs():
         data["id"] = doc.id
         fournisseurs.append(data)
     return fournisseurs
+
+
+def charger_missions_custom(ca_id):
+    """Retourne les missions personnalisées d'un CA (collection 'missions_custom',
+    filtrée par ca_id). L'agent tourne avec l'Admin SDK, donc pas de restriction
+    de lecture ici — contrairement au client web qui est soumis aux règles Firestore."""
+    db = _get_db()
+    docs = db.collection("missions_custom").where(filter=FieldFilter("ca_id", "==", ca_id)).stream()
+    missions = []
+    for doc in docs:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        missions.append(data)
+    return missions

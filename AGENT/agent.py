@@ -22,6 +22,7 @@ from firebase_client import (
     charger_techniciens as fb_charger_techniciens,
     charger_charges_affaires as fb_charger_charges_affaires,
     charger_fournisseurs as fb_charger_fournisseurs,
+    charger_missions_custom as fb_charger_missions_custom,
     charger_saisies_du_jour,
     charger_saisies_semaine,
 )
@@ -98,6 +99,9 @@ def charger_charges_affaires():
 
 def charger_fournisseurs():
     return fb_charger_fournisseurs()
+
+def charger_missions_custom(ca_id):
+    return fb_charger_missions_custom(ca_id)
 
 def charger_saisies():
     raise NotImplementedError("charger_saisies() supprimée — utiliser charger_saisies_du_jour() ou charger_saisies_semaine() depuis firebase_client.")
@@ -268,19 +272,70 @@ CHAMPS_PAR_MISSION = {
     "Controle_ANC":       ["anc_controles", "anc_conformes", "anc_non_conformes"],
 }
 
-def _union_champs_missions(missions):
-    """Union ordonnée et dédupliquée des champs CHAMPS_PAR_MISSION pour un ensemble de
-    missions. Utilisée quand un technicien a changé de mission en cours de semaine : on
-    veut afficher les champs de TOUTES les missions réellement rencontrées, pas seulement
-    de sa mission actuelle, pour ne perdre aucune donnée déjà calculée."""
+def get_champs_mission(mission_key, missions_custom=None):
+    """Résout la liste des clés de champs d'une mission, STATIQUE ou PERSONNALISÉE
+    (missions_custom : liste de docs Firestore {id, ca_id, label, couleur, champs:
+    [{key,label,type}], ...} pour le CA concerné — voir charger_missions_custom).
+    Même pattern que getMissionData() côté React : statique d'abord, puis custom."""
+    if mission_key in CHAMPS_PAR_MISSION:
+        return CHAMPS_PAR_MISSION[mission_key]
+    for m in (missions_custom or []):
+        if m.get("id") == mission_key:
+            return [c["key"] for c in m.get("champs", [])]
+    return []
+
+def get_label_mission(mission_key, missions_custom=None):
+    """Résout le libellé affichable d'une mission, statique ou personnalisée. Contrairement
+    à MISSIONS côté React, l'agent n'a pas de libellé français dédié pour les missions
+    statiques : on en dérive un depuis la clé (RT_Compteur_Module -> "RT Compteur Module").
+    Pour une mission personnalisée, utilise le label réellement saisi par le CA."""
+    for m in (missions_custom or []):
+        if m.get("id") == mission_key:
+            return m.get("label", mission_key)
+    return (mission_key or "").replace("_", " ")
+
+def _labels_pour_missions(missions_custom=None):
+    """Fusionne LABELS_CHAMPS (statique) avec les labels des champs de toutes les
+    missions personnalisées fournies, pour que le libellé affiché d'un champ custom
+    soit celui saisi par le CA plutôt que sa clé technique (slug)."""
+    labels = dict(LABELS_CHAMPS)
+    for m in (missions_custom or []):
+        for c in m.get("champs", []):
+            labels.setdefault(c["key"], c.get("label", c["key"]))
+    return labels
+
+def _union_champs_missions(missions, missions_custom=None):
+    """Union ordonnée et dédupliquée des champs (statiques OU personnalisés) pour un
+    ensemble de missions. Utilisée quand un technicien a changé de mission en cours de
+    semaine : on veut afficher les champs de TOUTES les missions réellement rencontrées,
+    pas seulement de sa mission actuelle, pour ne perdre aucune donnée déjà calculée."""
     vus = set()
     champs = []
     for m in missions:
-        for k in CHAMPS_PAR_MISSION.get(m, []):
+        for k in get_champs_mission(m, missions_custom):
             if k not in vus:
                 vus.add(k)
                 champs.append(k)
     return champs
+
+def _stats_paires_mission(saisie, mission, missions_custom=None):
+    """Retourne [(label, valeur), ...] des champs renseignés d'une saisie, pour une
+    mission statique OU personnalisée. Ajoute "Heures" en fin de liste si le champ
+    total_heures n'est pas déjà listé par la mission elle-même. Brique commune à
+    _formater_stats_mission (HTML) et generer_analyse_claude (texte brut pour Claude) —
+    garantit que les deux reçoivent exactement les mêmes libellés et valeurs."""
+    labels = _labels_pour_missions(missions_custom)
+    champs = get_champs_mission(mission, missions_custom)
+    paires = []
+    for key in champs:
+        val = saisie.get(key)
+        if val is not None:
+            paires.append((labels.get(key, key), val))
+    if "total_heures" not in champs:
+        heures = saisie.get("total_heures")
+        if heures is not None:
+            paires.append((labels.get("total_heures", "Heures"), heures))
+    return paires
 
 # ─── TÂCHE 1 : RAPPEL 20H AUX TECHNICIENS ────────────────────────────────────
 def tache_rappel_techniciens():
@@ -328,32 +383,27 @@ def tache_rappel_techniciens():
         envoyer_email(config, tech["email"], f"{tech['prenom']} {tech['nom']}", sujet, corps)
 
 # ─── ANALYSE CLAUDE ───────────────────────────────────────────────────────────
-def generer_analyse_claude(ca, mes_techs, saisies_jour, non_saisis_ids):
-    """Génère une analyse narrative de la journée via Claude API."""
+def generer_analyse_claude(ca, mes_techs, saisies_jour, non_saisis_ids, missions_custom=None):
+    """Génère une analyse narrative de la journée via Claude API.
+
+    missions_custom : missions personnalisées DU CA concerné (charger_missions_custom),
+    nécessaire pour que les champs et le libellé de mission soient corrects même pour
+    un technicien affecté à une mission personnalisée (et pas seulement statique).
+    """
     try:
         lignes = []
         for tech in mes_techs:
             saisie = next((s for s in saisies_jour if s["tech_id"] == tech["uid"]), None)
             # Mission au moment de CETTE saisie (fallback mission actuelle) — évite de
             # mal libeller un technicien dont la mission a changé après sa saisie du matin.
-            mission = ((saisie.get("mission_au_moment_saisie") if saisie else None) or tech["mission"]).replace("_", " ")
+            mission_key = (saisie.get("mission_au_moment_saisie") if saisie else None) or tech["mission"]
+            mission_label = get_label_mission(mission_key, missions_custom)
             if saisie:
-                champs = {
-                    "Heures": saisie.get("total_heures"),
-                    "CPT DN15-20": saisie.get("cpt_dn15_20"),
-                    "CPT DN>20": saisie.get("cpt_dn_sup20"),
-                    "Modules posés": saisie.get("modules_poses"),
-                    "CPT relevés": saisie.get("cpt_releves"),
-                    "Infructueux": saisie.get("infructueux"),
-                    "Ctrl AC <10pts": saisie.get("ctrl_vente_inf10"),
-                    "Ctrl AC >10pts": saisie.get("ctrl_vente_sup10"),
-                    "Paniers midi": saisie.get("paniers_midi"),
-                    "Paniers soir": saisie.get("paniers_soir"),
-                }
-                stats_str = ", ".join(f"{k}: {v}" for k, v in champs.items() if v is not None)
-                lignes.append(f"- {tech['prenom']} {tech['nom']} ({mission}) : {stats_str or 'données saisies'}")
+                paires = _stats_paires_mission(saisie, mission_key, missions_custom)
+                stats_str = ", ".join(f"{label}: {val}" for label, val in paires)
+                lignes.append(f"- {tech['prenom']} {tech['nom']} ({mission_label}) : {stats_str or 'données saisies'}")
             else:
-                lignes.append(f"- {tech['prenom']} {tech['nom']} ({mission}) : NON SAISI")
+                lignes.append(f"- {tech['prenom']} {tech['nom']} ({mission_label}) : NON SAISI")
 
         donnees = "\n".join(lignes)
         date_str = datetime.now().strftime("%A %d %B %Y")
@@ -382,22 +432,28 @@ Sois direct et factuel. Mets en avant les performances notables et les manques (
 
 
 # ─── ANALYSE CLAUDE HEBDO ────────────────────────────────────────────────────
-def generer_analyse_claude_semaine(ca, mes_techs, totaux, semaine):
-    """Génère une analyse narrative hebdomadaire via Claude API."""
+def generer_analyse_claude_semaine(ca, mes_techs, totaux, semaine, missions_custom=None):
+    """Génère une analyse narrative hebdomadaire via Claude API.
+
+    missions_custom : missions personnalisées DU CA concerné (charger_missions_custom),
+    nécessaire pour que les champs et le libellé de mission soient corrects même pour
+    un technicien affecté à une mission personnalisée.
+    """
     try:
+        labels = _labels_pour_missions(missions_custom)
         lignes = []
         for tech in mes_techs:
             total = totaux.get(tech["uid"], {})
             nb_jours = total.get("nb_jours", 0)
-            mission = tech["mission"].replace("_", " ")
+            mission = get_label_mission(tech["mission"], missions_custom)
             # Union des champs des missions effectivement rencontrées dans la semaine
             # (total["missions_semaine"], calculé par _calculer_totaux_pour_saisies) —
             # pas seulement la mission actuelle, pour ne pas faire dire à Claude qu'un
             # technicien "n'a presque rien fait" alors qu'il a travaillé sous une autre
             # mission avant d'être réaffecté en cours de semaine.
-            champs = _union_champs_missions(total.get("missions_semaine") or [tech["mission"]])
+            champs = _union_champs_missions(total.get("missions_semaine") or [tech["mission"]], missions_custom)
             stats = ", ".join(
-                f"{LABELS_CHAMPS.get(k, k)}: {total.get(k, 0)}"
+                f"{labels.get(k, k)}: {total.get(k, 0)}"
                 for k in champs if total.get(k) is not None
             )
             lignes.append(
@@ -455,6 +511,10 @@ def tache_recap_journalier():
         if not mes_techs:
             continue
 
+        # Missions personnalisées DE CE CA — nécessaire pour résoudre correctement les
+        # champs/libellés d'un technicien affecté à une mission personnalisée.
+        missions_custom_ca = charger_missions_custom(ca["id"])
+
         # Construire le tableau HTML des techniciens
         lignes_html = ""
         for tech in mes_techs:
@@ -467,14 +527,14 @@ def tache_recap_journalier():
             mission_du_jour = (saisie.get("mission_au_moment_saisie") if saisie else None) or tech.get("mission", "")
 
             if saisie:
-                stats = _formater_stats_mission(saisie, mission_du_jour)
+                stats = _formater_stats_mission(saisie, mission_du_jour, missions_custom_ca)
             else:
                 stats = "<em style='color:#999'>—</em>"
 
             lignes_html += f"""
             <tr style="border-bottom: 1px solid #f0f0f0; background: {'#fff' if saisie else '#fff5f5'};">
                 <td style="padding: 10px 16px; font-weight: 600;">{tech['prenom']} {tech['nom']}</td>
-                <td style="padding: 10px 16px; color: #666; font-size: 13px;">{mission_du_jour.replace('_', ' ')}</td>
+                <td style="padding: 10px 16px; color: #666; font-size: 13px;">{get_label_mission(mission_du_jour, missions_custom_ca)}</td>
                 <td style="padding: 10px 16px; font-size: 13px;">{stats}</td>
                 <td style="padding: 10px 16px; text-align: center;">
                     <span style="background: {statut_couleur}20; color: {statut_couleur}; padding: 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600;">
@@ -487,7 +547,7 @@ def tache_recap_journalier():
         nb_saisis = len(mes_techs) - len([t for t in mes_techs if t["uid"] in non_saisis_ids])
         nb_total = len(mes_techs)
 
-        analyse = generer_analyse_claude(ca, mes_techs, saisies_jour, non_saisis_ids)
+        analyse = generer_analyse_claude(ca, mes_techs, saisies_jour, non_saisis_ids, missions_custom_ca)
         bloc_analyse = f"""
                 <div style="background: #F0F7FF; border-left: 4px solid #1A56DB; margin: 0 24px 16px; padding: 14px 16px; border-radius: 0 6px 6px 0; font-size: 14px; line-height: 1.6; color: #1e3a5f;">
                     <strong style="display: block; margin-bottom: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #1A56DB;">Analyse du jour · Claude</strong>
@@ -532,16 +592,11 @@ def tache_recap_journalier():
         """
         envoyer_email(config, ca["email"], f"{ca['prenom']} {ca['nom']}", sujet, corps)
 
-def _formater_stats_mission(saisie, mission):
-    """Formate les stats d'une saisie selon la mission du technicien."""
-    parts = []
-    for key in CHAMPS_PAR_MISSION.get(mission, []):
-        val = saisie.get(key)
-        if val is not None:
-            parts.append(f"{LABELS_CHAMPS.get(key, key)} : <strong>{val}</strong>")
-    heures = saisie.get("total_heures")
-    if heures is not None:
-        parts.append(f"Heures : <strong>{heures}</strong>")
+def _formater_stats_mission(saisie, mission, missions_custom=None):
+    """Formate les stats d'une saisie selon la mission du technicien (statique ou
+    personnalisée — missions_custom : liste des missions du CA concerné)."""
+    paires = _stats_paires_mission(saisie, mission, missions_custom)
+    parts = [f"{label} : <strong>{val}</strong>" for label, val in paires]
     html = " · ".join(parts) if parts else "Données saisies"
     commentaires = (saisie.get("commentaires") or "").strip()
     if commentaires:
@@ -549,8 +604,9 @@ def _formater_stats_mission(saisie, mission):
     return html
 
 # ─── UTILITAIRE FORMATAGE TOTAUX HEBDO ───────────────────────────────────────
-def _formater_totaux_mission(total, mission_fallback):
-    """Formate les totaux hebdomadaires d'un technicien.
+def _formater_totaux_mission(total, mission_fallback, missions_custom=None):
+    """Formate les totaux hebdomadaires d'un technicien (statique ou personnalisée —
+    missions_custom : liste des missions du CA concerné).
 
     Utilise l'union des champs de TOUTES les missions effectivement rencontrées dans
     la semaine (total["missions_semaine"], calculé par _calculer_totaux_pour_saisies) :
@@ -559,12 +615,13 @@ def _formater_totaux_mission(total, mission_fallback):
     par un filtrage sur la seule mission actuelle. À défaut (pas de saisie cette semaine,
     ou anciennes saisies sans le champ), retombe sur mission_fallback (mission actuelle).
     """
-    champs = _union_champs_missions(total.get("missions_semaine") or [mission_fallback])
+    labels = _labels_pour_missions(missions_custom)
+    champs = _union_champs_missions(total.get("missions_semaine") or [mission_fallback], missions_custom)
     parts = []
     for key in champs:
         val = total.get(key)
         if val is not None:
-            parts.append(f"{LABELS_CHAMPS.get(key, key)} : <strong>{val}</strong>")
+            parts.append(f"{labels.get(key, key)} : <strong>{val}</strong>")
     heures = total.get("total_heures")
     if heures is not None and "total_heures" not in champs:
         parts.append(f"Heures : <strong>{heures}h</strong>")
@@ -615,6 +672,10 @@ def tache_recap_hebdo_ca():
             for uid in uids_a_afficher if uid in techs_par_uid
         }
 
+        # Missions personnalisées DE CE CA — nécessaire pour résoudre correctement les
+        # champs/libellés d'un technicien affecté à une mission personnalisée.
+        missions_custom_ca = charger_missions_custom(ca["id"])
+
         # Grouper par mission
         missions_map = {}
         for tech in mes_techs:
@@ -628,7 +689,7 @@ def tache_recap_hebdo_ca():
             for tech in techs:
                 total = totaux.get(tech["uid"], {})
                 nb_jours = total.get("nb_jours", 0)
-                stats_html = _formater_totaux_mission(total, mission)
+                stats_html = _formater_totaux_mission(total, mission, missions_custom_ca)
                 if nb_jours >= 4:
                     badge_bg, badge_color = "#D1FAE5", "#065F46"
                 elif nb_jours == 0:
@@ -647,12 +708,12 @@ def tache_recap_hebdo_ca():
             blocs_html += f"""
             <tr>
                 <td colspan="3" style="padding:8px 16px 6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#0369A1; background:#F0F7FF; border-top:2px solid #BFDBFE;">
-                    {mission.replace('_', ' ')}
+                    {get_label_mission(mission, missions_custom_ca)}
                 </td>
             </tr>
             {lignes_mission}"""
 
-        analyse = generer_analyse_claude_semaine(ca, mes_techs, totaux, semaine)
+        analyse = generer_analyse_claude_semaine(ca, mes_techs, totaux, semaine, missions_custom_ca)
         bloc_analyse = f"""
         <div style="background:#F0F7FF; border-left:4px solid #0369A1; margin:16px 24px; padding:14px 16px; border-radius:0 6px 6px 0; font-size:14px; line-height:1.6; color:#1e3a5f;">
             <strong style="display:block; margin-bottom:6px; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:#0369A1;">Analyse de la semaine · Claude</strong>
