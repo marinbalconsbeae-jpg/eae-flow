@@ -326,6 +326,17 @@ const CHAMPS_PAR_MISSION = {
   Controle_ANC:       ["ctrl_anc_conformes", "ctrl_anc_non_conformes", "ctrl_anc_inaccessibles", "total_heures"],
 };
 
+// Résout une mission (statique OU personnalisée par un CA) et retourne toujours la même
+// forme { label, couleur, champs }, quel que soit son origine. À utiliser partout où une
+// mission est affichée/interprétée à partir d'une clé (mission d'un technicien, d'une
+// saisie, etc.) — remplace les lookups directs MISSIONS[clé].
+function getMissionData(missionKey, missionsCustom = []) {
+  if (MISSIONS[missionKey]) return MISSIONS[missionKey];
+  const custom = missionsCustom.find(m => m.id === missionKey);
+  if (custom) return { label: custom.label, couleur: custom.couleur, champs: custom.champs || [] };
+  return undefined;
+}
+
 function getDateKey() { return new Date().toISOString().split("T")[0]; }
 function getSemaineKeyFromDate(d) {
   // ISO 8601 : semaine 1 = semaine contenant le premier jeudi de l'année
@@ -517,6 +528,47 @@ async function modifierFournisseur(id, email) {
 }
 async function supprimerFournisseur(id) {
   await deleteDoc(doc(db, "fournisseurs", id));
+}
+
+// ─── MISSIONS PERSONNALISÉES (par CA) ─────────────────────────────────────────
+const COULEURS_MISSION_CUSTOM = ["#0369A1", "#7C3AED", "#B45309", "#0891B2", "#DC2626", "#059669"];
+
+async function chargerMissionsCustom(caId) {
+  const q = query(collection(db, "missions_custom"), where("ca_id", "==", caId));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+async function creerMissionCustom(caId, nom, couleur, champs) {
+  const ref = doc(collection(db, "missions_custom"));
+  await setDoc(ref, {
+    ca_id: caId,
+    label: nom,
+    couleur,
+    champs, // [{ key, label, type }]
+    date_creation: new Date().toISOString(),
+  });
+  return ref.id;
+}
+async function supprimerMissionCustom(id) {
+  // Refuse la suppression si un technicien a encore cette mission comme mission ACTUELLE
+  // (mission_au_moment_saisie sur les saisies passées n'est pas concerné : l'historique
+  // reste lisible même après suppression de la mission via ce champ figé).
+  const q = query(collection(db, "utilisateurs"), where("role", "==", "technicien"), where("mission", "==", id));
+  const snap = await getDocs(q);
+  if (!snap.empty) {
+    const n = snap.size;
+    throw new Error(`${n} technicien${n > 1 ? "s" : ""} ${n > 1 ? "utilisent" : "utilise"} encore cette mission — réaffecte-le${n > 1 ? "s" : ""} avant de la supprimer.`);
+  }
+  await deleteDoc(doc(db, "missions_custom", id));
+}
+// Génère une clé machine unique à partir d'un label de champ (ex: "CPT relancés" -> "cpt_relances")
+function slugifyChampKey(label, existingKeys) {
+  const DIACRITIQUES = new RegExp("[" + String.fromCharCode(0x0300) + "-" + String.fromCharCode(0x036f) + "]", "g");
+  let base = label.toLowerCase().normalize("NFD").replace(DIACRITIQUES, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!base) base = "champ";
+  let key = base, i = 2;
+  while (existingKeys.includes(key)) { key = `${base}_${i}`; i++; }
+  return key;
 }
 
 // ─── COMPOSANTS PRIMITIFS ─────────────────────────────────────────────────────
@@ -853,11 +905,11 @@ const VueConnexion = ({ onLogin }) => {
 // ─── HEADER ───────────────────────────────────────────────────────────────────
 const Header = ({ user, onLogout, page, onChangePage, onLogoClick }) => {
   const isTech = user.role === "technicien";
-  const mission = isTech && user.mission ? MISSIONS[user.mission] : null;
+  const mission = isTech && user.mission ? getMissionData(user.mission, []) : null;
 
   const navItems = isTech
     ? [{ id: "saisie", label: "Saisie du jour" }, { id: "historique", label: "Historique" }]
-    : [{ id: "dashboard", label: "Dashboard" }, { id: "historique", label: "Historique" }, { id: "gestion", label: "Mes techniciens" }, { id: "fournisseurs", label: "Fournisseurs" }];
+    : [{ id: "dashboard", label: "Dashboard" }, { id: "historique", label: "Historique" }, { id: "gestion", label: "Mes techniciens" }, { id: "fournisseurs", label: "Fournisseurs" }, { id: "missions", label: "Missions" }];
 
   return (
     <header style={{
@@ -936,7 +988,7 @@ const Header = ({ user, onLogout, page, onChangePage, onLogoClick }) => {
 
 // ─── VUE SAISIE TECHNICIEN ────────────────────────────────────────────────────
 const VueSaisie = ({ user }) => {
-  const mission = MISSIONS[user.mission];
+  const mission = getMissionData(user.mission, []);
   const jourIdx = getJourActuel();
   const [form, setForm] = useState({});
   const [statut, setStatut] = useState("loading");
@@ -1041,7 +1093,7 @@ const VueSaisie = ({ user }) => {
 // Symétrique de VueHistorique (CA) : sélecteur de semaine + détail jour par jour
 // pour le technicien connecté, réutilisant Card / Badge / Voyant.
 const VueHistoriqueTech = ({ user }) => {
-  const mission = MISSIONS[user.mission];
+  const mission = getMissionData(user.mission, []);
   const [semOffset, setSemOffset] = useState(0);
   const [saisiesSem, setSaisiesSem] = useState({});
   const [loading, setLoading] = useState(true);
@@ -1058,7 +1110,7 @@ const VueHistoriqueTech = ({ user }) => {
   const missionsSemaineMap = new Map();
   Object.values(saisiesSem).forEach(s => {
     const mKey = s.mission_au_moment_saisie || user.mission;
-    if (!missionsSemaineMap.has(mKey)) missionsSemaineMap.set(mKey, MISSIONS[mKey]);
+    if (!missionsSemaineMap.has(mKey)) missionsSemaineMap.set(mKey, getMissionData(mKey, []));
   });
   if (missionsSemaineMap.size === 0) missionsSemaineMap.set(user.mission, mission);
   const champsTousNumMap = new Map();
@@ -1227,7 +1279,7 @@ const VueHistoriqueTech = ({ user }) => {
       {/* Modal détail complet d'une journée — TOUS les champs de la mission, pas seulement les 4 principaux */}
       {detailJour && (() => {
         // Mission au moment de CETTE saisie (fallback : mission actuelle pour les anciennes saisies sans le champ)
-        const missionJour = MISSIONS[detailJour.saisie.mission_au_moment_saisie || user.mission];
+        const missionJour = getMissionData(detailJour.saisie.mission_au_moment_saisie || user.mission, []);
         const champsNum = missionJour?.champs.filter(c => c.type === "number") || [];
         return (
           <Modal maxWidth={460} onClose={() => setDetailJour(null)}>
@@ -1279,17 +1331,19 @@ const VueDashboard = ({ user, onVoirProfil }) => {
   const [saisiesJour, setSaisiesJour] = useState({});
   const [saisiesSemaine, setSaisiesSemaine] = useState({});
   const [tousTechs, setTousTechs] = useState([]);
+  const [missionsCustom, setMissionsCustom] = useState([]);
   const [recherche, setRecherche] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
   const [loading, setLoading] = useState(true);
   const searchRef = useRef(null);
 
   useEffect(() => {
-    Promise.all([chargerMesTechniciens(user.uid), chargerSaisiesJour(), chargerTousTechniciens()])
-      .then(([techs, saisies, tous]) => {
+    Promise.all([chargerMesTechniciens(user.uid), chargerSaisiesJour(), chargerTousTechniciens(), chargerMissionsCustom(user.uid)])
+      .then(([techs, saisies, tous, missions]) => {
         setTechniciens(techs);
         setSaisiesJour(saisies);
         setTousTechs(tous);
+        setMissionsCustom(missions);
         setLoading(false);
         // Charge les saisies de la semaine pour chaque technicien en parallèle
         Promise.all(techs.map(t => chargerSaisiesSemaine(t.uid).then(s => [t.uid, s])))
@@ -1398,7 +1452,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
                 Autres techniciens
               </div>
               {autresTech.map(t => {
-                const m = MISSIONS[t.mission];
+                const m = getMissionData(t.mission, missionsCustom);
                 return (
                   <div key={t.uid}
                     onClick={() => { onVoirProfil(t); setShowDropdown(false); setRecherche(""); }}
@@ -1431,7 +1485,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
 
       {/* Tableaux par mission */}
       {Object.entries(parMission).map(([missionKey, techs]) => {
-        const mission = MISSIONS[missionKey];
+        const mission = getMissionData(missionKey, missionsCustom);
         const champKeys = CHAMPS_PAR_MISSION[missionKey] || mission?.champs.filter(c => c.type === "number").slice(0, 4).map(c => c.key) || [];
         const champs4 = champKeys.map(k => mission?.champs.find(c => c.key === k)).filter(Boolean);
         const total = techs.reduce((acc, t) => acc + ((saisiesJour[t.uid]?.[champs4[0]?.key]) || 0), 0);
@@ -1570,7 +1624,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
               </thead>
               <tbody>
                 {techniciens.map((tech, i) => {
-                  const mission = MISSIONS[tech.mission];
+                  const mission = getMissionData(tech.mission, missionsCustom);
                   const semTech = saisiesSemaine[tech.uid] || {};
                   const jourActuel = getJourActuel();
 
@@ -1610,14 +1664,14 @@ const VueDashboard = ({ user, onVoirProfil }) => {
 
       {/* Modal détail complet des totaux semaine — TOUS les champs de la mission */}
       {detailTech && (() => {
-        const missionDetail = MISSIONS[detailTech.mission];
+        const missionDetail = getMissionData(detailTech.mission, missionsCustom);
         // Union des champs numériques de toutes les missions effectivement utilisées
         // cette semaine (saisie.mission_au_moment_saisie, fallback mission actuelle)
         const saisiesDetail = Object.values(saisiesSemaine[detailTech.uid] || {});
         const missionsUtiliseesMap = new Map();
         saisiesDetail.forEach(s => {
           const mKey = s.mission_au_moment_saisie || detailTech.mission;
-          if (!missionsUtiliseesMap.has(mKey)) missionsUtiliseesMap.set(mKey, MISSIONS[mKey]);
+          if (!missionsUtiliseesMap.has(mKey)) missionsUtiliseesMap.set(mKey, getMissionData(mKey, missionsCustom));
         });
         if (missionsUtiliseesMap.size === 0) missionsUtiliseesMap.set(detailTech.mission, missionDetail);
         const champsNumMap = new Map();
@@ -1682,6 +1736,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
 const VueGestion = ({ user }) => {
   const [techniciens, setTechniciens] = useState([]);
   const [fournisseursList, setFournisseursList] = useState([]);
+  const [missionsCustom, setMissionsCustom] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ nom: "", prenom: "", email: "", mission: "RT_Compteur_Module", fournisseur: "" });
@@ -1700,6 +1755,7 @@ const VueGestion = ({ user }) => {
   useEffect(() => {
     recharger();
     chargerFournisseurs().then(f => setFournisseursList(f.map(x => x.nom)));
+    chargerMissionsCustom(user.uid).then(setMissionsCustom);
   }, []);
 
   const handleCreer = async (e) => {
@@ -1782,12 +1838,12 @@ const VueGestion = ({ user }) => {
             </thead>
             <tbody>
               {techniciens.map((tech, i) => {
-                const mission = MISSIONS[tech.mission];
+                const mission = getMissionData(tech.mission, missionsCustom);
                 const isEditing = editUid === tech.uid;
                 const borderStyle = { borderBottom: i < techniciens.length - 1 ? `1px solid ${T.border}` : "none" };
 
                 if (isEditing) {
-                  const editMission = MISSIONS[editForm.mission];
+                  const editMission = getMissionData(editForm.mission, missionsCustom);
                   return (
                     <tr key={tech.uid} style={{ ...borderStyle, background: T.blueLight }}>
                       <td style={{ padding: "10px 16px" }}>
@@ -1915,7 +1971,7 @@ const VueGestion = ({ user }) => {
         <Modal maxWidth={380} onClose={() => { setAbsenceTech(null); setDateRetour(""); }}>
           <div style={{ padding: 24 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-              <Avatar prenom={absenceTech.prenom} nom={absenceTech.nom} couleur={MISSIONS[absenceTech.mission]?.couleur || T.inkSub} size={36} />
+              <Avatar prenom={absenceTech.prenom} nom={absenceTech.nom} couleur={getMissionData(absenceTech.mission, missionsCustom)?.couleur || T.inkSub} size={36} />
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>Marquer absent</div>
                 <div style={{ fontSize: 12, color: T.inkSub }}>{absenceTech.prenom} {absenceTech.nom}</div>
@@ -1950,8 +2006,9 @@ const VueGestion = ({ user }) => {
 };
 
 // ─── VUE PROFIL TECHNICIEN ────────────────────────────────────────────────────
-const VueProfilTechnicien = ({ tech, onRetour, origin }) => {
-  const mission = MISSIONS[tech.mission];
+const VueProfilTechnicien = ({ user, tech, onRetour, origin }) => {
+  const [missionsCustom, setMissionsCustom] = useState([]);
+  const mission = getMissionData(tech.mission, missionsCustom);
   const [saisiesSem, setSaisiesSem] = useState({});
   const [loading, setLoading] = useState(true);
   const jourActuel = getJourActuel();
@@ -1959,6 +2016,10 @@ const VueProfilTechnicien = ({ tech, onRetour, origin }) => {
 
   useEffect(() => {
     chargerSaisiesSemaine(tech.uid).then(d => { setSaisiesSem(d); setLoading(false); });
+    // Missions personnalisées du CA connecté (pas forcément le CA du technicien affiché,
+    // ex: résultat de recherche "autres techniciens") — seule liste que les règles
+    // Firestore autorisent à lire pour l'utilisateur courant.
+    chargerMissionsCustom(user.uid).then(setMissionsCustom);
   }, [tech.uid]);
 
   return (
@@ -2001,7 +2062,7 @@ const VueProfilTechnicien = ({ tech, onRetour, origin }) => {
               // saisie (et non de la mission actuelle du technicien, qui a pu changer
               // depuis) : un changement de mission en cours de semaine ne doit pas
               // afficher 0 pour des jours saisis sous l'ancienne mission.
-              const missionJour = saisie ? (MISSIONS[saisie.mission_au_moment_saisie || tech.mission] || mission) : mission;
+              const missionJour = saisie ? (getMissionData(saisie.mission_au_moment_saisie || tech.mission, missionsCustom) || mission) : mission;
               const champPrincipalJour = missionJour?.champs.find(c => ["cpt_dn15_20", "cpt_releves", "ctrl_vente_inf10"].includes(c.key));
               return (
                 <div key={jour}
@@ -2041,7 +2102,7 @@ const VueProfilTechnicien = ({ tech, onRetour, origin }) => {
             );
             // Mission AU MOMENT de cette saisie précise (fallback mission actuelle pour
             // les anciennes saisies sans le champ).
-            const missionSaisieJour = MISSIONS[saisieJour.mission_au_moment_saisie || tech.mission] || mission;
+            const missionSaisieJour = getMissionData(saisieJour.mission_au_moment_saisie || tech.mission, missionsCustom) || mission;
             const champsNum = missionSaisieJour?.champs.filter(c => c.type === "number") || [];
             return (
               <Card animate style={{ marginTop: 16 }}>
@@ -2077,7 +2138,7 @@ const VueProfilTechnicien = ({ tech, onRetour, origin }) => {
       {/* Modal détail complet d'un jour de la grille hebdo — TOUS les champs de la mission */}
       {detailJour && (() => {
         // Mission au moment de CETTE saisie (fallback : mission actuelle pour les anciennes saisies sans le champ)
-        const missionJour = MISSIONS[detailJour.saisie.mission_au_moment_saisie || tech.mission] || mission;
+        const missionJour = getMissionData(detailJour.saisie.mission_au_moment_saisie || tech.mission, missionsCustom) || mission;
         const champsNum = missionJour?.champs.filter(c => c.type === "number") || [];
         return (
           <Modal maxWidth={460} onClose={() => setDetailJour(null)}>
@@ -2128,6 +2189,7 @@ const VueHistorique = ({ user, onVoirProfil }) => {
   const [semOffset, setSemOffset] = useState(0);
   const [techniciens, setTechniciens] = useState([]);
   const [saisiesParTech, setSaisiesParTech] = useState({});
+  const [missionsCustom, setMissionsCustom] = useState([]);
   const [loading, setLoading] = useState(true);
   const [detailTech, setDetailTech] = useState(null); // technicien dont la modal "Totaux semaine" est ouverte
 
@@ -2142,6 +2204,8 @@ const VueHistorique = ({ user, onVoirProfil }) => {
       setLoading(false);
     });
   }, [semaine.key]);
+
+  useEffect(() => { chargerMissionsCustom(user.uid).then(setMissionsCustom); }, []);
 
   // Calcule les totaux hebdomadaires d'un technicien
   function calcTotaux(uid) {
@@ -2200,7 +2264,7 @@ const VueHistorique = ({ user, onVoirProfil }) => {
           </Card>
         ) : (
           Object.entries(parMission).map(([missionKey, techs]) => {
-            const mission = MISSIONS[missionKey];
+            const mission = getMissionData(missionKey, missionsCustom);
             const champKeys = CHAMPS_PAR_MISSION[missionKey] || mission?.champs.filter(c => c.type === "number").slice(0, 4).map(c => c.key) || [];
             const champs4 = champKeys.map(k => mission?.champs.find(c => c.key === k)).filter(Boolean);
             const totalMission = techs.reduce((acc, t) => acc + (calcTotaux(t.uid)[champs4[0]?.key] || 0), 0);
@@ -2303,7 +2367,7 @@ const VueHistorique = ({ user, onVoirProfil }) => {
 
       {/* Modal détail complet des totaux semaine — TOUS les champs de la mission, pas seulement les 4 du tableau */}
       {detailTech && (() => {
-        const missionDetail = MISSIONS[detailTech.mission];
+        const missionDetail = getMissionData(detailTech.mission, missionsCustom);
         // Union des champs numériques de TOUTES les missions effectivement utilisées dans les
         // saisies de la semaine (saisie.mission_au_moment_saisie, fallback mission actuelle du
         // technicien pour les anciennes saisies sans ce champ) — pas seulement sa mission actuelle.
@@ -2311,7 +2375,7 @@ const VueHistorique = ({ user, onVoirProfil }) => {
         const missionsUtiliseesMap = new Map();
         saisiesDetail.forEach(s => {
           const mKey = s.mission_au_moment_saisie || detailTech.mission;
-          if (!missionsUtiliseesMap.has(mKey)) missionsUtiliseesMap.set(mKey, MISSIONS[mKey]);
+          if (!missionsUtiliseesMap.has(mKey)) missionsUtiliseesMap.set(mKey, getMissionData(mKey, missionsCustom));
         });
         if (missionsUtiliseesMap.size === 0) missionsUtiliseesMap.set(detailTech.mission, missionDetail);
         const champsNumMap = new Map();
@@ -2552,10 +2616,205 @@ const VueFournisseurs = ({ user }) => {
   );
 };
 
+// ─── VUE MISSIONS PERSONNALISÉES (CA) ─────────────────────────────────────────
+const VueMissions = ({ user }) => {
+  const [missions, setMissions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [nom, setNom] = useState("");
+  const [couleur, setCouleur] = useState(COULEURS_MISSION_CUSTOM[0]);
+  const [champsForm, setChampsForm] = useState([{ label: "", type: "number" }]);
+  const [saving, setSaving] = useState(false);
+  const [succes, setSucces] = useState("");
+  const [erreur, setErreur] = useState("");
+  const [confirmSuppr, setConfirmSuppr] = useState(null);
+  const [supprLoading, setSupprLoading] = useState(false);
+
+  const recharger = () => chargerMissionsCustom(user.uid).then(m => { setMissions(m); setLoading(false); });
+  useEffect(() => { recharger(); }, []);
+
+  const resetForm = () => {
+    setNom(""); setCouleur(COULEURS_MISSION_CUSTOM[0]); setChampsForm([{ label: "", type: "number" }]);
+  };
+  const handleAjouterChamp = () => setChampsForm(p => [...p, { label: "", type: "number" }]);
+  const handleSupprimerChamp = (idx) => setChampsForm(p => p.filter((_, i) => i !== idx));
+  const handleChampChange = (idx, cle, valeur) => setChampsForm(p => p.map((c, i) => i === idx ? { ...c, [cle]: valeur } : c));
+
+  const handleCreer = async (e) => {
+    e.preventDefault();
+    setErreur(""); setSucces("");
+    const nomTrim = nom.trim();
+    if (!nomTrim) { setErreur("Le nom de la mission est requis."); return; }
+    const champsValides = champsForm.filter(c => c.label.trim());
+    if (champsValides.length === 0) { setErreur("Ajoute au moins un champ."); return; }
+
+    // Génère une clé machine unique par champ (dédupliquée au sein de cette mission)
+    const clesExistantes = [];
+    const champsFinal = champsValides.map(c => {
+      const key = slugifyChampKey(c.label.trim(), clesExistantes);
+      clesExistantes.push(key);
+      return { key, label: c.label.trim(), type: c.type };
+    });
+
+    setSaving(true);
+    try {
+      await creerMissionCustom(user.uid, nomTrim, couleur, champsFinal);
+      setSucces(`Mission "${nomTrim}" créée.`);
+      setShowForm(false);
+      resetForm();
+      recharger();
+    } catch {
+      setErreur("Erreur lors de la création de la mission.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <Spinner />;
+
+  return (
+    <div style={{ padding: "28px 24px", maxWidth: 720, margin: "0 auto" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, animation: `fadeUp 250ms ${T.easeOut} both` }}>
+        <div>
+          <h1 style={{ fontSize: 20, fontWeight: 700, color: T.ink, letterSpacing: "-0.02em", marginBottom: 4 }}>Missions</h1>
+          <p style={{ fontSize: 13, color: T.inkSub }}>
+            {missions.length} mission{missions.length !== 1 ? "s" : ""} personnalisée{missions.length !== 1 ? "s" : ""}
+          </p>
+        </div>
+        <Btn onClick={() => { setShowForm(v => !v); setSucces(""); setErreur(""); if (!showForm) resetForm(); }}>
+          {showForm ? "Annuler" : "+ Créer une mission"}
+        </Btn>
+      </div>
+
+      {succes && <Alert type="success" style={{ marginBottom: 20 }}>{succes}</Alert>}
+      {erreur && <Alert type="error" style={{ marginBottom: 20 }}>{erreur}</Alert>}
+
+      {showForm && (
+        <Card animate style={{ marginBottom: 20, padding: 24 }}>
+          <SectionLabel>Nouvelle mission</SectionLabel>
+          <form onSubmit={handleCreer}>
+            <div style={{ marginBottom: 16 }}>
+              <Field label="Nom de la mission">
+                <input className="field-input" value={nom} onChange={e => setNom(e.target.value)} required placeholder="Ex : Relevé secteur Nord" />
+              </Field>
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <Field label="Couleur">
+                <div style={{ display: "flex", gap: 10, marginTop: 2 }}>
+                  {COULEURS_MISSION_CUSTOM.map(c => (
+                    <button key={c} type="button" onClick={() => setCouleur(c)} title={c}
+                      style={{
+                        width: 28, height: 28, borderRadius: "50%", background: c, cursor: "pointer",
+                        padding: 0, border: `2px solid ${couleur === c ? T.ink : "transparent"}`,
+                        boxShadow: couleur === c ? `0 0 0 2px ${T.surface}, 0 0 0 4px ${c}66` : T.shadowXs,
+                        transition: `box-shadow 150ms ${T.easeOut}, border-color 150ms ${T.easeOut}`,
+                      }} />
+                  ))}
+                </div>
+              </Field>
+            </div>
+
+            <div style={{ marginBottom: 8 }}>
+              <Field label="Champs de saisie" sublabel="au moins un requis">
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 2 }}>
+                  {champsForm.map((champ, idx) => (
+                    <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input className="field-input" value={champ.label}
+                        onChange={e => handleChampChange(idx, "label", e.target.value)}
+                        placeholder="Nom du champ" style={{ flex: 1 }} />
+                      <select className="field-input" value={champ.type}
+                        onChange={e => handleChampChange(idx, "type", e.target.value)}
+                        style={{ width: 150, flexShrink: 0 }}>
+                        <option value="number">Nombre</option>
+                        <option value="textarea">Commentaire</option>
+                      </select>
+                      <button type="button" onClick={() => handleSupprimerChamp(idx)}
+                        title="Supprimer ce champ"
+                        style={{ background: "none", border: "none", cursor: "pointer", color: T.red, fontSize: 20, lineHeight: 1, padding: "4px 6px", flexShrink: 0 }}>
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </Field>
+            </div>
+            <button type="button" onClick={handleAjouterChamp}
+              style={{ background: "none", border: "none", color: T.blue, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: "6px 0 20px" }}>
+              + Ajouter un champ
+            </button>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <Btn variant="secondary" onClick={() => setShowForm(false)}>Annuler</Btn>
+              <Btn type="submit" loading={saving}>Créer</Btn>
+            </div>
+          </form>
+        </Card>
+      )}
+
+      <Card animate>
+        {missions.length === 0 ? (
+          <div style={{ padding: "48px 24px", textAlign: "center", color: T.inkMuted, fontSize: 14 }}>
+            Aucune mission personnalisée.<br />
+            <span style={{ fontSize: 13 }}>Crée une mission pour l'attribuer à un technicien depuis "Mes techniciens".</span>
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                {["Mission", "Champs", ""].map(h => (
+                  <th key={h} style={{
+                    textAlign: h === "" ? "center" : "left",
+                    padding: "10px 16px", fontSize: 10, color: T.inkMuted, fontWeight: 700,
+                    textTransform: "uppercase", letterSpacing: "0.08em",
+                  }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {missions.map((m, i) => (
+                <tr key={m.id} className="table-row" style={{ borderBottom: i < missions.length - 1 ? `1px solid ${T.border}` : "none" }}>
+                  <td style={{ padding: "13px 16px" }}>
+                    <Badge couleur={m.couleur} label={m.label} />
+                  </td>
+                  <td style={{ padding: "13px 16px", fontSize: 12, color: T.inkSub }}>
+                    {(m.champs || []).map(c => c.label).join(" · ") || "—"}
+                  </td>
+                  <td style={{ padding: "13px 16px", textAlign: "center", whiteSpace: "nowrap" }}>
+                    {confirmSuppr === m.id ? (
+                      <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                        <Btn variant="danger" loading={supprLoading} style={{ fontSize: 11, padding: "3px 10px" }} onClick={async () => {
+                          setSupprLoading(true);
+                          try {
+                            await supprimerMissionCustom(m.id);
+                            setSucces(`Mission "${m.label}" supprimée.`);
+                            setConfirmSuppr(null);
+                            recharger();
+                          } catch (e) {
+                            setErreur(e.message || "Erreur lors de la suppression.");
+                            setConfirmSuppr(null);
+                          } finally { setSupprLoading(false); }
+                        }}>Confirmer</Btn>
+                        <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px" }} onClick={() => setConfirmSuppr(null)}>Annuler</Btn>
+                      </div>
+                    ) : (
+                      <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.red }} onClick={() => { setConfirmSuppr(m.id); setSucces(""); setErreur(""); }}>Supprimer</Btn>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </div>
+  );
+};
+
 // ─── VUE MON PROFIL ───────────────────────────────────────────────────────────
 const VueMonProfil = ({ user }) => {
   const isTech = user.role === "technicien";
-  const mission = isTech ? MISSIONS[user.mission] : null;
+  const mission = isTech ? getMissionData(user.mission, []) : null;
   const roleLabel = { technicien: "Technicien", charge_affaires: "Chargé d'affaires" }[user.role] || user.role;
 
   const [emailActuel, setEmailActuel] = useState(user.email || auth.currentUser?.email || "");
@@ -2736,8 +2995,9 @@ export default function App() {
 
           {page === "gestion" && <VueGestion user={user} />}
           {page === "fournisseurs" && <VueFournisseurs user={user} />}
+          {page === "missions" && <VueMissions user={user} />}
           {page === "mon_profil" && <VueMonProfil user={user} />}
-          {page === "profil" && profilTech && <VueProfilTechnicien tech={profilTech} origin={profilOrigin} onRetour={fermerFicheProfil} />}
+          {page === "profil" && profilTech && <VueProfilTechnicien user={user} tech={profilTech} origin={profilOrigin} onRetour={fermerFicheProfil} />}
         </main>
       </div>
     </>

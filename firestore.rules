@@ -70,6 +70,14 @@ service cloud.firestore {
       allow write: if isCA();
     }
 
+    // ─── MISSIONS PERSONNALISÉES (par CA) ────────────────────────────────────
+    match /missions_custom/{missionId} {
+      // Un CA peut créer une mission, à condition qu'elle lui soit rattachée
+      allow create: if isCA() && request.resource.data.ca_id == request.auth.uid;
+      // Un CA peut lire/modifier/supprimer UNIQUEMENT ses propres missions
+      allow read, update, delete: if isCA() && resource.data.ca_id == request.auth.uid;
+    }
+
     // Tout le reste est refusé par défaut
   }
 }
