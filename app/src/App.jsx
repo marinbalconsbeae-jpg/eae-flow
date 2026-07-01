@@ -851,7 +851,7 @@ const VueConnexion = ({ onLogin }) => {
 };
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
-const Header = ({ user, onLogout, page, onChangePage }) => {
+const Header = ({ user, onLogout, page, onChangePage, onLogoClick }) => {
   const isTech = user.role === "technicien";
   const mission = isTech && user.mission ? MISSIONS[user.mission] : null;
 
@@ -871,7 +871,13 @@ const Header = ({ user, onLogout, page, onChangePage }) => {
     }}>
       {/* Logo + Nav */}
       <div style={{ display: "flex", alignItems: "center", gap: 22 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, paddingRight: 22, borderRight: `1px solid ${T.navyLine}` }}>
+        <div
+          onClick={onLogoClick}
+          role="button" tabIndex={0}
+          onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onLogoClick(); } }}
+          title="Accueil"
+          className="btn-press"
+          style={{ display: "flex", alignItems: "center", gap: 10, paddingRight: 22, borderRight: `1px solid ${T.navyLine}`, cursor: "pointer" }}>
           <div style={{ width: 30, height: 30, background: `linear-gradient(135deg, ${T.blueMid}, ${T.blueDeep})`, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: `0 2px 10px ${T.blue}66, inset 0 1px 0 rgba(255,255,255,0.25)` }}>
             <svg width="15" height="15" fill="none" stroke="#fff" strokeWidth="2" viewBox="0 0 24 24">
               <path d="M12 2C8 2 4 5.5 4 10c0 6 8 12 8 12s8-6 8-12c0-4.5-4-8-8-8z" strokeLinejoin="round"/>
@@ -1659,7 +1665,10 @@ const VueDashboard = ({ user, onVoirProfil }) => {
               ))}
             </div>
 
-            <div style={{ padding: "14px 22px", borderTop: `1px solid ${T.border}`, textAlign: "right" }}>
+            <div style={{ padding: "14px 22px", borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", gap: 10 }}>
+              <Btn variant="secondary" onClick={() => { const t = detailTech; setDetailTech(null); onVoirProfil(t); }}>
+                Voir la fiche complète
+              </Btn>
               <Btn variant="secondary" onClick={() => setDetailTech(null)}>Fermer</Btn>
             </div>
           </Modal>
@@ -1941,11 +1950,12 @@ const VueGestion = ({ user }) => {
 };
 
 // ─── VUE PROFIL TECHNICIEN ────────────────────────────────────────────────────
-const VueProfilTechnicien = ({ tech, onRetour }) => {
+const VueProfilTechnicien = ({ tech, onRetour, origin }) => {
   const mission = MISSIONS[tech.mission];
   const [saisiesSem, setSaisiesSem] = useState({});
   const [loading, setLoading] = useState(true);
   const jourActuel = getJourActuel();
+  const [detailJour, setDetailJour] = useState(null); // { jour, dateStr, saisie } | null
 
   useEffect(() => {
     chargerSaisiesSemaine(tech.uid).then(d => { setSaisiesSem(d); setLoading(false); });
@@ -1957,7 +1967,7 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
         onMouseOver={e => e.currentTarget.style.color = T.ink}
         onMouseOut={e => e.currentTarget.style.color = T.inkSub}>
         <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7" strokeLinecap="round" strokeLinejoin="round"/></svg>
-        Retour au dashboard
+        {origin === "historique" ? "Retour à l'historique" : "Retour au dashboard"}
       </button>
 
       <Card animate style={{ marginBottom: 16, padding: "20px 24px" }}>
@@ -1985,7 +1995,8 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
           {/* Grille hebdo */}
           <div className="stagger" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
             {JOURS.slice(0, 5).map((jour, idx) => {
-              const saisie = saisiesSem[getDateDuJour(idx)];
+              const dateStr = getDateDuJour(idx);
+              const saisie = saisiesSem[dateStr];
               // Le champ "principal" affiché dépend de la mission AU MOMENT de CETTE
               // saisie (et non de la mission actuelle du technicien, qui a pu changer
               // depuis) : un changement de mission en cours de semaine ne doit pas
@@ -1993,11 +2004,16 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
               const missionJour = saisie ? (MISSIONS[saisie.mission_au_moment_saisie || tech.mission] || mission) : mission;
               const champPrincipalJour = missionJour?.champs.find(c => ["cpt_dn15_20", "cpt_releves", "ctrl_vente_inf10"].includes(c.key));
               return (
-                <div key={jour} style={{
-                  background: T.surface, borderRadius: 10,
-                  border: idx === jourActuel ? `2px solid ${T.blue}` : `1px solid ${T.border}`,
-                  padding: "14px 10px", textAlign: "center",
-                }}>
+                <div key={jour}
+                  onClick={() => saisie && setDetailJour({ jour, dateStr, saisie })}
+                  title={saisie ? "Voir le détail de la journée" : undefined}
+                  style={{
+                    background: T.surface, borderRadius: 10,
+                    border: idx === jourActuel ? `2px solid ${T.blue}` : `1px solid ${T.border}`,
+                    padding: "14px 10px", textAlign: "center",
+                    cursor: saisie ? "pointer" : "default",
+                    transition: `border-color 150ms ${T.easeOut}, box-shadow 150ms ${T.easeOut}`,
+                  }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: T.inkMuted, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>{jour.slice(0, 3)}</div>
                   <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}><Voyant saisi={!!saisie} /></div>
                   {saisie && champPrincipalJour ? (
@@ -2057,12 +2073,58 @@ const VueProfilTechnicien = ({ tech, onRetour }) => {
           })()}
         </>
       )}
+
+      {/* Modal détail complet d'un jour de la grille hebdo — TOUS les champs de la mission */}
+      {detailJour && (() => {
+        // Mission au moment de CETTE saisie (fallback : mission actuelle pour les anciennes saisies sans le champ)
+        const missionJour = MISSIONS[detailJour.saisie.mission_au_moment_saisie || tech.mission] || mission;
+        const champsNum = missionJour?.champs.filter(c => c.type === "number") || [];
+        return (
+          <Modal maxWidth={460} onClose={() => setDetailJour(null)}>
+            <div style={{ padding: "18px 22px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: T.ink }}>{detailJour.jour}</div>
+                <div style={{ fontSize: 12, color: T.inkSub }}>
+                  {new Date(detailJour.dateStr + "T00:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}
+                </div>
+              </div>
+              {missionJour && <Badge couleur={missionJour.couleur} label={missionJour.label} small />}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)" }}>
+              {champsNum.map((champ, i) => (
+                <div key={champ.key} style={{
+                  padding: "16px 12px", textAlign: "center",
+                  borderRight: (i + 1) % 3 !== 0 ? `1px solid ${T.border}` : "none",
+                  borderBottom: i < champsNum.length - (champsNum.length % 3 === 0 ? 3 : champsNum.length % 3) ? `1px solid ${T.border}` : "none",
+                }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: missionJour?.couleur, fontFamily: "'Fira Code', monospace", lineHeight: 1, marginBottom: 5 }}>
+                    {detailJour.saisie[champ.key] ?? 0}
+                  </div>
+                  <div style={{ fontSize: 10, color: T.inkSub, fontWeight: 500, lineHeight: 1.3 }}>{champ.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {detailJour.saisie.commentaires && (
+              <div style={{ padding: "14px 22px", borderTop: `1px solid ${T.border}`, fontSize: 13, color: T.inkMid, lineHeight: 1.5 }}>
+                <span style={{ fontWeight: 700, fontSize: 11, color: T.inkMuted, textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 4 }}>Commentaires</span>
+                {detailJour.saisie.commentaires}
+              </div>
+            )}
+
+            <div style={{ padding: "14px 22px", borderTop: `1px solid ${T.border}`, textAlign: "right" }}>
+              <Btn variant="secondary" onClick={() => setDetailJour(null)}>Fermer</Btn>
+            </div>
+          </Modal>
+        );
+      })()}
     </div>
   );
 };
 
 // ─── VUE HISTORIQUE ───────────────────────────────────────────────────────────
-const VueHistorique = ({ user }) => {
+const VueHistorique = ({ user, onVoirProfil }) => {
   const [semOffset, setSemOffset] = useState(0);
   const [techniciens, setTechniciens] = useState([]);
   const [saisiesParTech, setSaisiesParTech] = useState({});
@@ -2297,8 +2359,13 @@ const VueHistorique = ({ user }) => {
               ))}
             </div>
 
-            <div style={{ padding: "14px 22px", borderTop: `1px solid ${T.border}`, textAlign: "right" }}>
-              <Btn variant="secondary" onClick={() => setDetailTech(null)}>Fermer</Btn>
+            <div style={{ padding: "14px 22px", borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", gap: 10 }}>
+              {onVoirProfil && (
+                <Btn variant="secondary" onClick={() => { const t = detailTech; setDetailTech(null); onVoirProfil(t); }}>
+                  Voir la fiche complète
+                </Btn>
+              )}
+              <Btn variant="secondary" onClick={() => setDetailTech(null)} style={onVoirProfil ? undefined : { marginLeft: "auto" }}>Fermer</Btn>
             </div>
           </Modal>
         );
@@ -2594,7 +2661,15 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [page, setPage] = useState(null);
   const [profilTech, setProfilTech] = useState(null);
+  const [profilOrigin, setProfilOrigin] = useState("dashboard"); // "dashboard" | "historique" — page à laquelle revenir en quittant la fiche
   const [initLoading, setInitLoading] = useState(true);
+
+  // Refs tenues à jour à chaque render : nécessaires car le listener popstate est posé
+  // une seule fois (mount) et ne doit pas capturer des valeurs figées (stale closure).
+  const profilTechRef = useRef(null);
+  const profilOriginRef = useRef("dashboard");
+  useEffect(() => { profilTechRef.current = profilTech; }, [profilTech]);
+  useEffect(() => { profilOriginRef.current = profilOrigin; }, [profilOrigin]);
 
   useEffect(() => {
     const unsub = auth.onAuthStateChanged(async (fu) => {
@@ -2607,9 +2682,44 @@ export default function App() {
     return () => unsub();
   }, []);
 
+  // Bouton "précédent" du navigateur : si une fiche technicien est ouverte, on la ferme
+  // et on revient à la page d'origine au lieu de laisser le navigateur quitter le site.
+  useEffect(() => {
+    const onPopState = () => {
+      if (profilTechRef.current) {
+        setProfilTech(null);
+        setPage(profilOriginRef.current);
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
   const handleLogin = (u) => { setUser(u); setPage(u.role === "technicien" ? "saisie" : "dashboard"); };
   const handleLogout = async () => { await signOut(auth); setUser(null); setPage(null); setProfilTech(null); };
   const handleChangePage = (p) => { setProfilTech(null); setPage(p); };
+
+  // Ouvre la fiche d'un technicien depuis le dashboard ou l'historique. Pousse un état
+  // d'historique : un retour arrière fermera la fiche (géré par le popstate ci-dessus)
+  // au lieu de faire quitter l'application.
+  const ouvrirProfil = (tech, origin) => {
+    setProfilTech(tech);
+    setProfilOrigin(origin);
+    setPage("profil");
+    window.history.pushState({ eaeFlowProfilOuvert: true }, "");
+  };
+
+  // Ferme la fiche ouverte en repassant par history.back() : ainsi le bouton "Retour" de
+  // la fiche, le clic sur le logo et le bouton "précédent" du navigateur passent tous par
+  // le même popstate listener — une seule source de vérité pour la fermeture.
+  const fermerFicheProfil = () => {
+    if (profilTechRef.current) window.history.back();
+  };
+
+  const handleLogoClick = () => {
+    if (page === "profil") fermerFicheProfil();
+    else setPage(user.role === "technicien" ? "saisie" : "dashboard");
+  };
 
   if (initLoading) return <><GlobalStyles /><Spinner full /></>;
   if (!user) return <><GlobalStyles /><VueConnexion onLogin={handleLogin} /></>;
@@ -2618,16 +2728,16 @@ export default function App() {
     <>
       <GlobalStyles />
       <div style={{ minHeight: "100vh", background: T.bg }}>
-        <Header user={user} onLogout={handleLogout} page={page} onChangePage={handleChangePage} />
+        <Header user={user} onLogout={handleLogout} page={page} onChangePage={handleChangePage} onLogoClick={handleLogoClick} />
         <main>
           {page === "saisie" && <VueSaisie user={user} />}
-          {page === "dashboard" && <VueDashboard user={user} onVoirProfil={t => { setProfilTech(t); setPage("profil"); }} />}
-          {page === "historique" && (user.role === "technicien" ? <VueHistoriqueTech user={user} /> : <VueHistorique user={user} />)}
+          {page === "dashboard" && <VueDashboard user={user} onVoirProfil={t => ouvrirProfil(t, "dashboard")} />}
+          {page === "historique" && (user.role === "technicien" ? <VueHistoriqueTech user={user} /> : <VueHistorique user={user} onVoirProfil={t => ouvrirProfil(t, "historique")} />)}
 
           {page === "gestion" && <VueGestion user={user} />}
           {page === "fournisseurs" && <VueFournisseurs user={user} />}
           {page === "mon_profil" && <VueMonProfil user={user} />}
-          {page === "profil" && profilTech && <VueProfilTechnicien tech={profilTech} onRetour={() => { setProfilTech(null); setPage("dashboard"); }} />}
+          {page === "profil" && profilTech && <VueProfilTechnicien tech={profilTech} origin={profilOrigin} onRetour={fermerFicheProfil} />}
         </main>
       </div>
     </>
