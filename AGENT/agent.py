@@ -254,10 +254,29 @@ LABELS_CHAMPS = {
     "pi_conformes":      "PI conformes",
     "pi_non_conformes":  "PI non conf.",
     "pi_inaccessibles":  "PI inaccessibles",
-    "anc_controles":     "ANC contrôlés",
-    "anc_conformes":     "ANC conformes",
-    "anc_non_conformes": "ANC non conf.",
+    "ctrl_anc_conformes":     "ANC conformes",
+    "ctrl_anc_non_conformes": "ANC non conf.",
+    "ctrl_anc_inaccessibles": "ANC inaccessibles",
+    "rdv_jour":          "RDV jour",
+    "rdv_eae":           "RDV EAE",
     "total_heures":      "Heures",
+}
+
+# Libellés français réellement affichés côté web (MISSIONS dans App.jsx) pour les missions
+# STATIQUES — l'agent n'a pas accès à ce même objet (autre langage/fichier), donc on les
+# duplique ici pour que get_label_mission() affiche exactement le même texte que l'appli,
+# plutôt qu'un libellé dérivé de la clé (qui perdait des suffixes comme "DN30-40" et les
+# accents, ex: "RT CPT SEPIG" au lieu de "RT CPT SEPIG DN30-40").
+MISSIONS_LABELS = {
+    "RT_Compteur_Module": "RT Compteur + Module",
+    "Releve_CPT":         "Relevé CPT",
+    "Controle_AC":        "Contrôle AC",
+    "RT_CPT_Arras":       "RT CPT Arras",
+    "RT_CPT_SEPIG":       "RT CPT SEPIG DN30-40",
+    "RT_CPT_Suez":        "RT CPT Suez PRC",
+    "RT_CPT":             "RT CPT générique",
+    "PI_Poteau_Incendie": "PI Poteau Incendie",
+    "Controle_ANC":       "Contrôle ANC",
 }
 
 CHAMPS_PAR_MISSION = {
@@ -269,7 +288,10 @@ CHAMPS_PAR_MISSION = {
     "RT_CPT_Suez":        ["cpt_dn15_20", "cpt_dn_sup20", "modules_poses"],
     "RT_CPT":             ["cpt_dn15_20", "cpt_dn_sup20", "rac"],
     "PI_Poteau_Incendie": ["pi_visites", "pi_conformes", "pi_non_conformes"],
-    "Controle_ANC":       ["anc_controles", "anc_conformes", "anc_non_conformes"],
+    # Clés corrigées (28/06 review) : le formulaire de saisie React écrit ctrl_anc_* ;
+    # les anciennes clés anc_* n'ont jamais existé dans les saisies réelles, donc les
+    # stats "Contrôle ANC" étaient silencieusement vides dans tous les mails de l'agent.
+    "Controle_ANC":       ["ctrl_anc_conformes", "ctrl_anc_non_conformes", "ctrl_anc_inaccessibles"],
 }
 
 def get_champs_mission(mission_key, missions_custom=None):
@@ -285,10 +307,13 @@ def get_champs_mission(mission_key, missions_custom=None):
     return []
 
 def get_label_mission(mission_key, missions_custom=None):
-    """Résout le libellé affichable d'une mission, statique ou personnalisée. Contrairement
-    à MISSIONS côté React, l'agent n'a pas de libellé français dédié pour les missions
-    statiques : on en dérive un depuis la clé (RT_Compteur_Module -> "RT Compteur Module").
-    Pour une mission personnalisée, utilise le label réellement saisi par le CA."""
+    """Résout le libellé affichable d'une mission, statique ou personnalisée. Pour une
+    mission statique, utilise MISSIONS_LABELS (copie des libellés réels de MISSIONS côté
+    React) ; pour une mission personnalisée, le label réellement saisi par le CA. Le
+    dérivé depuis la clé (replace '_' -> ' ') ne sert plus que de filet de sécurité pour
+    une clé statique qui serait absente de MISSIONS_LABELS."""
+    if mission_key in MISSIONS_LABELS:
+        return MISSIONS_LABELS[mission_key]
     for m in (missions_custom or []):
         if m.get("id") == mission_key:
             return m.get("label", mission_key)
@@ -318,12 +343,20 @@ def _union_champs_missions(missions, missions_custom=None):
                 champs.append(k)
     return champs
 
+
+# Champs toujours affichés s'ils sont renseignés, indépendamment de la liste de champs
+# propre à la mission (comme dans le formulaire de saisie React, où total_heures/paniers
+# apparaissent sur toutes les missions statiques) — évite de les faire disparaître
+# silencieusement pour une mission (statique ou personnalisée) qui ne les liste pas.
+_CHAMPS_TOUJOURS_AFFICHES = [("total_heures", "Heures"), ("paniers_midi", "Paniers midi"), ("paniers_soir", "Paniers soir")]
+
 def _stats_paires_mission(saisie, mission, missions_custom=None):
     """Retourne [(label, valeur), ...] des champs renseignés d'une saisie, pour une
-    mission statique OU personnalisée. Ajoute "Heures" en fin de liste si le champ
-    total_heures n'est pas déjà listé par la mission elle-même. Brique commune à
-    _formater_stats_mission (HTML) et generer_analyse_claude (texte brut pour Claude) —
-    garantit que les deux reçoivent exactement les mêmes libellés et valeurs."""
+    mission statique OU personnalisée. Ajoute Heures/Paniers midi/Paniers soir en fin de
+    liste s'ils ne sont pas déjà listés par la mission elle-même et sont renseignés dans
+    la saisie. Brique commune à _formater_stats_mission (HTML), _formater_totaux_mission
+    (HTML) et generer_analyse_claude (texte brut pour Claude) — garantit que ces trois
+    consommateurs reçoivent exactement les mêmes libellés et valeurs."""
     labels = _labels_pour_missions(missions_custom)
     champs = get_champs_mission(mission, missions_custom)
     paires = []
@@ -331,10 +364,11 @@ def _stats_paires_mission(saisie, mission, missions_custom=None):
         val = saisie.get(key)
         if val is not None:
             paires.append((labels.get(key, key), val))
-    if "total_heures" not in champs:
-        heures = saisie.get("total_heures")
-        if heures is not None:
-            paires.append((labels.get("total_heures", "Heures"), heures))
+    for key, label_defaut in _CHAMPS_TOUJOURS_AFFICHES:
+        if key not in champs:
+            val = saisie.get(key)
+            if val is not None:
+                paires.append((labels.get(key, label_defaut), val))
     return paires
 
 # ─── TÂCHE 1 : RAPPEL 20H AUX TECHNICIENS ────────────────────────────────────
@@ -622,9 +656,12 @@ def _formater_totaux_mission(total, mission_fallback, missions_custom=None):
         val = total.get(key)
         if val is not None:
             parts.append(f"{labels.get(key, key)} : <strong>{val}</strong>")
-    heures = total.get("total_heures")
-    if heures is not None and "total_heures" not in champs:
-        parts.append(f"Heures : <strong>{heures}h</strong>")
+    for key, label_defaut in _CHAMPS_TOUJOURS_AFFICHES:
+        if key not in champs:
+            val = total.get(key)
+            if val is not None:
+                suffixe = "h" if key == "total_heures" else ""
+                parts.append(f"{labels.get(key, label_defaut)} : <strong>{val}{suffixe}</strong>")
     return " · ".join(parts) if parts else "—"
 
 
@@ -667,14 +704,15 @@ def tache_recap_hebdo_ca():
         if not uids_a_afficher:
             continue
         mes_techs = [techs_par_uid[uid] for uid in uids_a_afficher if uid in techs_par_uid]
-        totaux = {
-            uid: _calculer_totaux_pour_saisies(techs_par_uid[uid], saisies_ca_par_tech.get(uid, []))
-            for uid in uids_a_afficher if uid in techs_par_uid
-        }
 
         # Missions personnalisées DE CE CA — nécessaire pour résoudre correctement les
-        # champs/libellés d'un technicien affecté à une mission personnalisée.
+        # champs/libellés d'un technicien affecté à une mission personnalisée, et pour
+        # sommer leurs champs numériques dans les totaux (voir _calculer_totaux_pour_saisies).
         missions_custom_ca = charger_missions_custom(ca["id"])
+        totaux = {
+            uid: _calculer_totaux_pour_saisies(techs_par_uid[uid], saisies_ca_par_tech.get(uid, []), missions_custom_ca)
+            for uid in uids_a_afficher if uid in techs_par_uid
+        }
 
         # Grouper par mission
         missions_map = {}
@@ -804,8 +842,20 @@ def tache_recap_hebdo_fournisseur():
             log.info(f"Aucun technicien pour le fournisseur '{nom_four}' — mail ignoré")
             continue
         ses_techs = [techs_par_uid[uid] for uid in uids_a_afficher if uid in techs_par_uid]
+
+        # Les techniciens d'un même fournisseur peuvent appartenir à des CA différents —
+        # charger les missions personnalisées PAR CA rencontré (et non un seul CA global,
+        # contrairement à tache_recap_hebdo_ca) pour résoudre correctement chacun.
+        missions_custom_par_ca = {}
+        for tech in ses_techs:
+            ca_id = tech.get("charge_id")
+            if ca_id and ca_id not in missions_custom_par_ca:
+                missions_custom_par_ca[ca_id] = charger_missions_custom(ca_id)
+
         totaux = {
-            uid: _calculer_totaux_pour_saisies(techs_par_uid[uid], saisies_four_par_tech.get(uid, []))
+            uid: _calculer_totaux_pour_saisies(
+                techs_par_uid[uid], saisies_four_par_tech.get(uid, []),
+                missions_custom_par_ca.get(techs_par_uid[uid].get("charge_id"), []))
             for uid in uids_a_afficher if uid in techs_par_uid
         }
 
@@ -813,8 +863,9 @@ def tache_recap_hebdo_fournisseur():
         for tech in ses_techs:
             total = totaux.get(tech["uid"], {})
             nb_jours = total.get("nb_jours", 0)
-            mission = tech.get("mission", "").replace("_", " ")
-            stats = _formater_totaux_mission(total, tech.get("mission", ""))
+            missions_custom_tech = missions_custom_par_ca.get(tech.get("charge_id"), [])
+            mission = get_label_mission(tech.get("mission", ""), missions_custom_tech)
+            stats = _formater_totaux_mission(total, tech.get("mission", ""), missions_custom_tech)
             lignes_html += f"""
             <tr style="border-bottom: 1px solid #F1F5F9;">
                 <td style="padding: 10px 16px; font-weight: 600; color: #020617;">{tech['prenom']} {tech['nom']}</td>
@@ -872,7 +923,7 @@ CHAMPS_NUMERIQUES = [
     "ctrl_vente_inf10", "ctrl_vente_sup10", "ctrl_contrat_inf10", "ctrl_contrat_sup10",
 ]
 
-def _calculer_totaux_pour_saisies(tech, saisies_tech):
+def _calculer_totaux_pour_saisies(tech, saisies_tech, missions_custom=None):
     """Calcule les totaux hebdomadaires d'un technicien à partir d'un sous-ensemble de
     saisies déjà filtré (ex: uniquement les jours où il dépendait d'un CA ou d'un
     fournisseur donné — voir tache_recap_hebdo_ca/fournisseur).
@@ -881,6 +932,10 @@ def _calculer_totaux_pour_saisies(tech, saisies_tech):
     dans ces saisies (mission_au_moment_saisie, fallback mission actuelle du technicien
     pour les anciennes saisies sans ce champ) — consommé par _formater_totaux_mission
     pour ne perdre aucun champ si la mission a changé en cours de semaine.
+
+    missions_custom : missions personnalisées à considérer pour sommer aussi leurs champs
+    numériques — CHAMPS_NUMERIQUES ne couvre que les champs des missions statiques, donc
+    sans ceci un champ custom serait calculé par la saisie mais jamais additionné ici.
     """
     total = {"tech_id": tech["uid"], "nb_jours": len(saisies_tech)}
     for champ in CHAMPS_NUMERIQUES:
@@ -890,6 +945,15 @@ def _calculer_totaux_pour_saisies(tech, saisies_tech):
     if not missions and tech.get("mission"):
         missions.add(tech["mission"])
     total["missions_semaine"] = sorted(missions)
+    champs_custom_vus = set()
+    for m in (missions_custom or []):
+        if m.get("id") in missions:
+            for c in m.get("champs", []):
+                if c.get("type") == "number":
+                    champs_custom_vus.add(c["key"])
+    for champ in champs_custom_vus:
+        if champ not in total:
+            total[champ] = sum(s.get(champ, 0) or 0 for s in saisies_tech)
     return total
 
 

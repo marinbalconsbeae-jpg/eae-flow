@@ -538,12 +538,41 @@ async function chargerMissionsCustom(caId) {
   const snap = await getDocs(q);
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
-// Lit UNE mission personnalisée par son id — utilisé côté technicien, qui n'a pas le
-// droit de lister toutes les missions_custom d'un CA (règle scopée à ca_id == charge_id
-// du lecteur), mais peut lire ce document précis puisqu'il correspond à sa propre mission.
+// Toutes les missions personnalisées, tous CA confondus — nécessaire pour résoudre la
+// mission d'un technicien affiché hors du CA connecté (recherche cross-CA du dashboard,
+// qui peut renvoyer des techniciens de PLUSIEURS CA différents dans une même liste).
+async function chargerToutesMissionsCustom() {
+  const snap = await getDocs(collection(db, "missions_custom"));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+// Lit UNE mission personnalisée par son id — fetch ciblé (un seul doc) utilisé pour
+// résoudre la mission propre d'un technicien (voir useMissionPropre), sans avoir à
+// charger toute la collection missions_custom pour un seul id.
 async function chargerMissionCustomParId(missionId) {
   const snap = await getDoc(doc(db, "missions_custom", missionId));
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+// Résout la mission PROPRE d'un utilisateur (technicien) : statique directement via
+// getMissionData, ou personnalisée via un fetch ciblé de son document si sa mission
+// n'est pas dans MISSIONS. Centralise le pattern dupliqué dans Header, VueMonProfil,
+// VueSaisie et VueHistoriqueTech. `erreurMission` passe à true si le fetch échoue (ex:
+// mission personnalisée supprimée, ou technicien transféré vers un autre CA laissant une
+// référence obsolète) — les appelants peuvent l'utiliser pour afficher un message
+// explicite plutôt que de rester bloqués indéfiniment sans explication.
+function useMissionPropre(missionKey) {
+  const [missionCustom, setMissionCustom] = useState(null);
+  const [erreurMission, setErreurMission] = useState(false);
+  useEffect(() => {
+    setMissionCustom(null);
+    setErreurMission(false);
+    if (missionKey && !MISSIONS[missionKey]) {
+      chargerMissionCustomParId(missionKey)
+        .then(setMissionCustom)
+        .catch(() => setErreurMission(true));
+    }
+  }, [missionKey]);
+  const missionsCustomDispo = missionCustom ? [missionCustom] : [];
+  return { mission: getMissionData(missionKey, missionsCustomDispo), missionsCustomDispo, erreurMission };
 }
 async function creerMissionCustom(caId, nom, couleur, champs) {
   const ref = doc(collection(db, "missions_custom"));
@@ -912,7 +941,7 @@ const VueConnexion = ({ onLogin }) => {
 // ─── HEADER ───────────────────────────────────────────────────────────────────
 const Header = ({ user, onLogout, page, onChangePage, onLogoClick }) => {
   const isTech = user.role === "technicien";
-  const mission = isTech && user.mission ? getMissionData(user.mission, []) : null;
+  const { mission } = useMissionPropre(isTech ? user.mission : null);
 
   const navItems = isTech
     ? [{ id: "saisie", label: "Saisie du jour" }, { id: "historique", label: "Historique" }]
@@ -995,8 +1024,7 @@ const Header = ({ user, onLogout, page, onChangePage, onLogoClick }) => {
 
 // ─── VUE SAISIE TECHNICIEN ────────────────────────────────────────────────────
 const VueSaisie = ({ user }) => {
-  const [missionCustomUnique, setMissionCustomUnique] = useState(null);
-  const mission = getMissionData(user.mission, missionCustomUnique ? [missionCustomUnique] : []);
+  const { mission, erreurMission } = useMissionPropre(user.mission);
   const jourIdx = getJourActuel();
   const [form, setForm] = useState({});
   const [statut, setStatut] = useState("loading");
@@ -1008,14 +1036,6 @@ const VueSaisie = ({ user }) => {
       setStatut("idle");
     }).catch(() => setStatut("idle"));
   }, []);
-
-  // Mission non statique => mission personnalisée du CA : le technicien n'a pas accès
-  // en lecture à toute la collection missions_custom, seulement à ce document précis.
-  useEffect(() => {
-    if (user.mission && !MISSIONS[user.mission]) {
-      chargerMissionCustomParId(user.mission).then(setMissionCustomUnique);
-    }
-  }, [user.mission]);
 
   const handleSubmit = async () => {
     if (dejaModifie) return;
@@ -1065,6 +1085,11 @@ const VueSaisie = ({ user }) => {
           Erreur lors de l'enregistrement. Vérifiez votre connexion.
         </Alert>
       )}
+      {erreurMission && (
+        <Alert type="error" style={{ marginBottom: 20 }}>
+          Impossible de charger votre mission. Contactez votre chargé d'affaires.
+        </Alert>
+      )}
 
       {/* Formulaire */}
       {mission && (
@@ -1109,18 +1134,7 @@ const VueSaisie = ({ user }) => {
 // Symétrique de VueHistorique (CA) : sélecteur de semaine + détail jour par jour
 // pour le technicien connecté, réutilisant Card / Badge / Voyant.
 const VueHistoriqueTech = ({ user }) => {
-  const [missionCustomUnique, setMissionCustomUnique] = useState(null);
-  // Mission non statique => mission personnalisée du CA : le technicien n'a pas accès en
-  // lecture à toute la collection missions_custom, seulement à ce document précis (voir
-  // règle Firestore : ca_id du document == charge_id du lecteur).
-  useEffect(() => {
-    if (user.mission && !MISSIONS[user.mission]) {
-      chargerMissionCustomParId(user.mission).then(setMissionCustomUnique);
-    }
-  }, [user.mission]);
-  const missionsCustomDispo = missionCustomUnique ? [missionCustomUnique] : [];
-
-  const mission = getMissionData(user.mission, missionsCustomDispo);
+  const { mission, missionsCustomDispo, erreurMission } = useMissionPropre(user.mission);
   const [semOffset, setSemOffset] = useState(0);
   const [saisiesSem, setSaisiesSem] = useState({});
   const [loading, setLoading] = useState(true);
@@ -1194,6 +1208,12 @@ const VueHistoriqueTech = ({ user }) => {
           })}
         </div>
       </div>
+
+      {erreurMission && (
+        <Alert type="error" style={{ marginBottom: 20 }}>
+          Impossible de charger votre mission. Contactez votre chargé d'affaires.
+        </Alert>
+      )}
 
       {loading ? <Spinner /> : (
         <>
@@ -1359,18 +1379,24 @@ const VueDashboard = ({ user, onVoirProfil }) => {
   const [saisiesSemaine, setSaisiesSemaine] = useState({});
   const [tousTechs, setTousTechs] = useState([]);
   const [missionsCustom, setMissionsCustom] = useState([]);
+  // Missions personnalisées de TOUS les CA — dédiée à la résolution des résultats de
+  // recherche "autres techniciens" (potentiellement de plusieurs CA différents), à ne
+  // pas confondre avec missionsCustom ci-dessus qui reste scopée au CA connecté pour
+  // les techniciens propres (groupes par mission, modale "Totaux semaine").
+  const [missionsCustomToutes, setMissionsCustomToutes] = useState([]);
   const [recherche, setRecherche] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
   const [loading, setLoading] = useState(true);
   const searchRef = useRef(null);
 
   useEffect(() => {
-    Promise.all([chargerMesTechniciens(user.uid), chargerSaisiesJour(), chargerTousTechniciens(), chargerMissionsCustom(user.uid)])
-      .then(([techs, saisies, tous, missions]) => {
+    Promise.all([chargerMesTechniciens(user.uid), chargerSaisiesJour(), chargerTousTechniciens(), chargerMissionsCustom(user.uid), chargerToutesMissionsCustom()])
+      .then(([techs, saisies, tous, missions, missionsToutes]) => {
         setTechniciens(techs);
         setSaisiesJour(saisies);
         setTousTechs(tous);
         setMissionsCustom(missions);
+        setMissionsCustomToutes(missionsToutes);
         setLoading(false);
         // Charge les saisies de la semaine pour chaque technicien en parallèle
         Promise.all(techs.map(t => chargerSaisiesSemaine(t.uid).then(s => [t.uid, s])))
@@ -1479,7 +1505,7 @@ const VueDashboard = ({ user, onVoirProfil }) => {
                 Autres techniciens
               </div>
               {autresTech.map(t => {
-                const m = getMissionData(t.mission, missionsCustom);
+                const m = getMissionData(t.mission, missionsCustomToutes);
                 return (
                   <div key={t.uid}
                     onClick={() => { onVoirProfil(t); setShowDropdown(false); setRecherche(""); }}
@@ -1890,6 +1916,7 @@ const VueGestion = ({ user }) => {
                         <select className="field-input" value={editForm.mission}
                           onChange={e => setEditForm(p => ({ ...p, mission: e.target.value }))}
                           style={{ fontSize: 12, padding: "6px 10px" }}>
+                          {!editForm.mission && <option value="">— Choisir une mission —</option>}
                           <optgroup label="Missions">
                             {Object.entries(MISSIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                           </optgroup>
@@ -1915,6 +1942,7 @@ const VueGestion = ({ user }) => {
                       <td style={{ padding: "10px 16px" }}>
                         <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                           <Btn loading={savingEdit} style={{ fontSize: 11, padding: "4px 12px" }} onClick={async () => {
+                            if (!editForm.mission) { setErreur("Sélectionne une mission avant d'enregistrer."); return; }
                             setSavingEdit(true); setErreur(""); setSucces("");
                             try {
                               const emailChange = tech.email !== editForm.email;
@@ -1974,10 +2002,16 @@ const VueGestion = ({ user }) => {
                       ) : (
                         <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
                           <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.blue }} onClick={() => {
+                            // Si la mission actuelle du technicien n'existe plus (mission personnalisée
+                            // supprimée depuis), ne pas la re-proposer par défaut dans le select — ça
+                            // forcerait un choix silencieusement invalide, risquant de re-sauvegarder
+                            // la référence cassée si le CA clique "Sauvegarder" sans toucher au champ.
+                            const missionValide = !!MISSIONS[tech.mission] || missionsCustom.some(m => m.id === tech.mission);
                             setEditUid(tech.uid);
-                            setEditForm({ mission: tech.mission, fournisseur: tech.fournisseur, email: tech.email || "" });
+                            setEditForm({ mission: missionValide ? tech.mission : "", fournisseur: tech.fournisseur, email: tech.email || "" });
                             setConfirmSuppr(null);
-                            setSucces(""); setErreur("");
+                            setSucces("");
+                            setErreur(missionValide ? "" : `Mission introuvable pour ${tech.prenom} ${tech.nom} (supprimée) — sélectionne une nouvelle mission avant d'enregistrer.`);
                           }}>Modifier</Btn>
                           {absent ? (
                             <Btn variant="ghost" style={{ fontSize: 11, padding: "3px 10px", color: T.amber }} onClick={async () => {
@@ -2047,7 +2081,7 @@ const VueGestion = ({ user }) => {
 };
 
 // ─── VUE PROFIL TECHNICIEN ────────────────────────────────────────────────────
-const VueProfilTechnicien = ({ user, tech, onRetour, origin }) => {
+const VueProfilTechnicien = ({ tech, onRetour, origin }) => {
   const [missionsCustom, setMissionsCustom] = useState([]);
   const mission = getMissionData(tech.mission, missionsCustom);
   const [saisiesSem, setSaisiesSem] = useState({});
@@ -2057,11 +2091,13 @@ const VueProfilTechnicien = ({ user, tech, onRetour, origin }) => {
 
   useEffect(() => {
     chargerSaisiesSemaine(tech.uid).then(d => { setSaisiesSem(d); setLoading(false); });
-    // Missions personnalisées du CA connecté (pas forcément le CA du technicien affiché,
-    // ex: résultat de recherche "autres techniciens") — seule liste que les règles
-    // Firestore autorisent à lire pour l'utilisateur courant.
-    chargerMissionsCustom(user.uid).then(setMissionsCustom);
-  }, [tech.uid]);
+    // Missions personnalisées DU CA DU TECHNICIEN AFFICHÉ (tech.charge_id) — ce profil
+    // peut être ouvert depuis un résultat de recherche "autres techniciens" appartenant
+    // à un CA différent du CA connecté. Les règles Firestore autorisent la lecture de
+    // n'importe quelle mission personnalisée par un utilisateur authentifié, donc ce
+    // chargement ciblé résout correctement le cas cross-CA comme le cas normal.
+    chargerMissionsCustom(tech.charge_id).then(setMissionsCustom);
+  }, [tech.uid, tech.charge_id]);
 
   return (
     <div style={{ padding: "28px 24px", maxWidth: 720, margin: "0 auto" }}>
@@ -2689,8 +2725,14 @@ const VueMissions = ({ user }) => {
     const champsValides = champsForm.filter(c => c.label.trim());
     if (champsValides.length === 0) { setErreur("Ajoute au moins un champ."); return; }
 
-    // Génère une clé machine unique par champ (dédupliquée au sein de cette mission)
-    const clesExistantes = [];
+    // Génère une clé machine unique par champ, dédupliquée non seulement au sein de
+    // cette mission mais aussi contre TOUTES les clés déjà utilisées par ce CA (missions
+    // statiques + ses autres missions personnalisées). Sans ça, une même clé générée pour
+    // deux missions différentes ferait fusionner silencieusement leurs valeurs partout où
+    // les stats sont sommées/affichées par clé brute (totaux hebdo web et agent Python).
+    const clesStatiques = Object.values(MISSIONS).flatMap(m => m.champs.map(c => c.key));
+    const clesAutresCustom = missions.flatMap(m => (m.champs || []).map(c => c.key));
+    const clesExistantes = [...clesStatiques, ...clesAutresCustom];
     const champsFinal = champsValides.map(c => {
       const key = slugifyChampKey(c.label.trim(), clesExistantes);
       clesExistantes.push(key);
@@ -2855,7 +2897,7 @@ const VueMissions = ({ user }) => {
 // ─── VUE MON PROFIL ───────────────────────────────────────────────────────────
 const VueMonProfil = ({ user }) => {
   const isTech = user.role === "technicien";
-  const mission = isTech ? getMissionData(user.mission, []) : null;
+  const { mission } = useMissionPropre(isTech ? user.mission : null);
   const roleLabel = { technicien: "Technicien", charge_affaires: "Chargé d'affaires" }[user.role] || user.role;
 
   const [emailActuel, setEmailActuel] = useState(user.email || auth.currentUser?.email || "");
@@ -3038,7 +3080,7 @@ export default function App() {
           {page === "fournisseurs" && <VueFournisseurs user={user} />}
           {page === "missions" && <VueMissions user={user} />}
           {page === "mon_profil" && <VueMonProfil user={user} />}
-          {page === "profil" && profilTech && <VueProfilTechnicien user={user} tech={profilTech} origin={profilOrigin} onRetour={fermerFicheProfil} />}
+          {page === "profil" && profilTech && <VueProfilTechnicien tech={profilTech} origin={profilOrigin} onRetour={fermerFicheProfil} />}
         </main>
       </div>
     </>

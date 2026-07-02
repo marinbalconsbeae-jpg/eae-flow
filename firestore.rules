@@ -15,11 +15,6 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/utilisateurs/$(request.auth.uid)).data.role == "charge_affaires";
     }
 
-    // charge_id du technicien courant (CA auquel il est rattaché) — non défini pour un CA
-    function monChargeId() {
-      return get(/databases/$(database)/documents/utilisateurs/$(request.auth.uid)).data.charge_id;
-    }
-
     // ─── UTILISATEURS ───────────────────────────────────────────────────────
     match /utilisateurs/{uid} {
       // Tout utilisateur authentifié peut lire tous les profils
@@ -79,11 +74,13 @@ service cloud.firestore {
     match /missions_custom/{missionId} {
       // Un CA peut créer une mission, à condition qu'elle lui soit rattachée
       allow create: if isCA() && request.resource.data.ca_id == request.auth.uid;
-      // Lecture : le CA propriétaire de la mission, OU un technicien rattaché à ce CA
-      // (nécessaire pour qu'un technicien résolve sa propre mission si elle est
-      // personnalisée — un getDoc ciblé sur cet id précis, jamais un listing).
-      allow read: if isAuthenticated()
-        && (resource.data.ca_id == request.auth.uid || resource.data.ca_id == monChargeId());
+      // Lecture : tout utilisateur authentifié (même pattern que /utilisateurs et
+      // /fournisseurs). Nécessaire pour qu'un technicien résolve sa propre mission
+      // personnalisée, mais aussi pour qu'un CA résolve la mission personnalisée
+      // D'UN AUTRE CA lors d'une recherche/fiche technicien cross-CA (dashboard) —
+      // une restriction à ca_id == soi-même ou son propre CA laissait ces cas
+      // illisibles. Le contenu exposé (label/couleur/champs) n'est pas sensible.
+      allow read: if isAuthenticated();
       // Modification/suppression réservées au CA propriétaire
       allow update, delete: if isCA() && resource.data.ca_id == request.auth.uid;
     }
